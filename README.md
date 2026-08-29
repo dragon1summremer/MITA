@@ -809,6 +809,8 @@ CONTROL_COMMANDS = {
     "дабл клик": lambda: pyautogui.doubleClick(),
     "двойной клик": lambda: pyautogui.doubleClick(),
     "пауза": lambda: pyautogui.press("space"),
+    "скрин": lambda: pyautogui.press("printscreen"),
+    "скриншот": lambda: pyautogui.press("printscreen"),
     "пробел": lambda: pyautogui.press("space"),
     "полный экран": lambda: pyautogui.doubleClick(),
     "на весь экран": lambda: pyautogui.doubleClick(),
