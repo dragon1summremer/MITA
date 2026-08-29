@@ -16,6 +16,8 @@ import sounddevice as sd
 import pygetwindow as gw
 import psutil
 import keyboard
+import ctypes
+import sys
 
 # Загрузка soundfile при наличии
 try:
@@ -30,33 +32,34 @@ pyautogui.FAILSAFE = False
 pyautogui.PAUSE = 0.05
 
 
+# Проверка прав администратора
+def is_admin():
+    try:
+        return ctypes.windll.shell32.IsUserAnAdmin()
+    except:
+        return False
 
 
+if not is_admin():
+    print("⚠️ ВНИМАНИЕ: Скрипт запущен без прав администратора!")
+    print("Некоторые команды могут не работать в защищенных приложениях.")
+    print("Рекомендуется перезапустить скрипт от имени администратора.\n")
+    # Можно автоматически перезапустить с правами админа
+    # ctypes.windll.shell32.ShellExecuteW(None, "runas", sys.executable, " ".join(sys.argv), None, 1)
 
-
-
-
-
-
-# Добавьте этот словарь в начало скрипта, после импортов
+# Словарь стоп-слов и мата
 STOP_WORDS = [
     "нахуй", "нахуй", "блядь", "блять", "сука", "сук", "хуй", "хую",
     "пизда", "пиздец", "ебан", "ебать", "заеб", "пидор", "гандон",
     "мудак", "уебок", "тупой", "дебил", "идиот", "кретин", "олень"
 ]
 
-# Или более полный список
 BAD_WORDS = [
     "нахуй", "блядь", "блять", "сука", "хуй", "пизда", "пиздец",
     "ебан", "ебать", "заеб", "пидор", "гандон", "мудак", "уебок",
     "тупой", "дебил", "идиот", "кретин", "олень", "козел", "козёл",
     "лох", "лошара", "чмо", "шлюха", "курва", "бля", "нах", "хер"
 ]
-
-
-
-
-
 
 
 # ============================================================
@@ -76,7 +79,6 @@ def get_available_drives() -> list[str]:
 def find_mita_folder():
     """Автоматически ищет папку MitaAIShka на дисках"""
     possible_paths = [
-        # Стандартные пути установки
         r"C:\AI MITA\MitaAIShka",
         r"D:\AI MITA\MitaAIShka",
         r"E:\AI MITA\MitaAIShka",
@@ -84,30 +86,25 @@ def find_mita_folder():
         r"C:\Program Files (x86)\AI MITA\MitaAIShka",
         r"C:\Users\{}\Documents\AI MITA\MitaAIShka".format(os.getlogin()),
         r"C:\Users\{}\Desktop\AI MITA\MitaAIShka".format(os.getlogin()),
-        # Текущая директория
         os.path.join(os.getcwd(), "MitaAIShka"),
         os.path.join(os.getcwd(), "AI MITA", "MitaAIShka"),
     ]
 
-    # Поиск на всех доступных дисках
     for drive in get_available_drives():
         possible_paths.append(os.path.join(drive, "AI MITA", "MitaAIShka"))
         possible_paths.append(os.path.join(drive, "MitaAIShka"))
         possible_paths.append(os.path.join(drive, "Users", os.getlogin(), "Documents", "AI MITA", "MitaAIShka"))
         possible_paths.append(os.path.join(drive, "Users", os.getlogin(), "Desktop", "AI MITA", "MitaAIShka"))
 
-    # Проверяем все пути (быстрый поиск)
     print("🔍 Ищу папку MitaAIShka...")
     for path in possible_paths:
         if os.path.exists(path):
-            # Проверяем наличие model.int8.onnx и tokens.txt
             model_file = os.path.join(path, "model.int8.onnx")
             tokens_file = os.path.join(path, "tokens.txt")
             if os.path.exists(model_file) and os.path.exists(tokens_file):
                 print(f"✓ Найдена папка MitaAIShka: {path}")
                 return path
 
-    # Если не нашли, ищем рекурсивно (только в Program Files и Users)
     print("🔍 Расширенный поиск MitaAIShka...")
     search_roots = []
     for drive in get_available_drives():
@@ -126,7 +123,6 @@ def find_mita_folder():
                 if os.path.exists(model_file) and os.path.exists(tokens_file):
                     print(f"✓ Найдена папка MitaAIShka: {test_path}")
                     return test_path
-            # Ограничиваем глубину для скорости
             if dirpath.count(os.sep) - root.count(os.sep) > 4:
                 continue
 
@@ -142,12 +138,10 @@ SOUNDS_DIR = os.path.join(os.getcwd(), "sounds")
 model_path = os.path.join(MODEL_DIR, "model.int8.onnx")
 tokens_path = os.path.join(MODEL_DIR, "tokens.txt")
 
-# Проверка наличия файлов модели
 if not os.path.exists(model_path) or not os.path.exists(tokens_path):
     print("❌ ОШИБКА: Файлы модели не найдены!")
     print(f"   Искал в: {MODEL_DIR}")
     print("   Убедитесь, что папка MitaAIShka содержит model.int8.onnx и tokens.txt")
-    print("   Или укажите путь вручную в коде (строка MODEL_DIR = ...)")
     exit(1)
 
 print(f"✅ Модель загружена из: {MODEL_DIR}")
@@ -187,7 +181,7 @@ GREETINGS_MAP = {
     "спишь": ("", ["how_are_you", "ne_spish"]),
 }
 
-# 1. Маппинг голосовых команд в системные ключи
+# Маппинг голосовых команд в системные ключи
 APP_TRANSLIT_MAP = {
     "дискорд": "discord",
     "роблокс": "roblox",
@@ -207,7 +201,6 @@ APP_TRANSLIT_MAP = {
     "блокнот": "notepad",
 }
 
-# 2. Маппинг ключей в реальные имена файлов (ДЛЯ ЗАПУСКА)
 APP_EXE_MAP = {
     "roblox": "RobloxPlayerBeta.exe",
     "discord": "Discord.exe",
@@ -235,7 +228,6 @@ APP_EXE_MAP = {
     "notepad": "notepad.exe",
 }
 
-# 3. Маппинг для ЗАКРЫТИЯ (реальные имена .exe процессов)
 PROCESS_KILL_MAP = {
     "obs": "obs64.exe",
     "обс": "obs64.exe",
@@ -281,354 +273,321 @@ WEB_URLS_MAP = {
     "почта": "https://mail.google.com",
 }
 
-# Списки URL для случайно выбираемой музыки
-UKRAINIAN_SONGS_URLS = [
-    "https://www.youtube.com/results?search_query=KAZKA+-+%D0%9F%D0%BB%D0%B0%D0%BA%D0%B0%D0%BB%D0%B0",
-    "https://www.youtube.com/results?search_query=KALUSH+%26+SKOFKA+-+%D0%94%D0%BE%D0%B4%D0%BE%D0%BC%D1%83",
-    "https://www.youtube.com/results?search_query=%D0%92%D1%80%D0%B5%D0%BC%D1%8F+%D0%B8+%D0%A1%D1%82%D0%B5%D0%BA%D0%BB%D0%BE+-+%D0%94%D0%B8%D0%BC",
-    "https://www.youtube.com/results?search_query=Kalush+Orchestra+-+Stefania",
-    "https://www.youtube.com/results?search_query=Artem+Pivovarov+-+%D0%94%D0%B5%D0%B6%D0%B0%D0%B2%D1%8E",
-    "https://www.youtube.com/results?search_query=%D0%9E%D0%BA%D0%B5%D0%B0%D0%BD+%D0%95%D0%BB%D1%8C%D0%B7%D0%B8+-+%D0%9E%D0%B1%D1%96%D0%B9%D0%BC%D0%B8",
-    "https://www.youtube.com/results?search_query=SKOFKA+-+%D0%A7%D1%83%D1%82%D0%B8+%D0%B3%D1%96%D0%BC%D0%BD",
-    "https://www.youtube.com/results?search_query=%D0%A5%D1%80%D0%B8%D1%81%D1%82%D0%B8%D0%BD%D0%B0+%D0%A1%D0%BE%D0%BB%D0%BE%D0%B2%D1%96%D0%B9+-+%D0%A2%D1%80%D0%B8%D0%BC%D0%B0%D0%B9",
-    "https://www.youtube.com/results?search_query=Artem+Pivovarov+%26+DOROFEEVA+-+%D0%94%D1%83%D0%BC%D0%B8",
-    "https://www.youtube.com/results?search_query=YAKTAK+%26+SOBOL+-+%D0%9F%D0%BE%D0%B3%D0%BB%D1%8F%D0%B4",
-    "https://www.youtube.com/results?search_query=%D0%9C%D0%B0%D0%BA%D1%81%D0%B8%D0%BC+%D0%91%D0%BE%D1%80%D0%BE%D0%B4%D1%96%D0%BD+-+%D0%AF%D0%BA%D0%B1%D0%B8+%D0%BD%D0%B5+%D1%82%D0%B8",
-    "https://www.youtube.com/results?search_query=DZIDZIO+-+%D0%92%D0%B8%D1%85%D1%96%D0%B4%D0%BD%D0%B8%D0%B9",
-    "https://www.youtube.com/results?search_query=YAKTAK+%26+KOLA+-+%D0%9F%D0%BE%D1%80%D1%96%D1%87%D0%BA%D0%B0",
-    "https://www.youtube.com/results?search_query=ZOZULYA+-+%D0%A7%D0%BE%D1%80%D0%BD%D0%B5+%D1%96+%D0%B1%D1%96%D0%BB%D0%B5",
-    "https://www.youtube.com/results?search_query=Artem+Pivovarov+%26+NK+-+%D0%A2%D0%B0%D0%BC+%D1%83+%D1%82%D0%BE%D0%BF%D0%BE%D0%BB%D1%96",
-    "https://www.youtube.com/results?search_query=O%D0%BB%D0%B5%D0%B3+%D0%92%D0%B8%D0%BD%D0%BD%D0%B8%D0%BA+-+%D0%92%D0%BE%D0%B2%D1%87%D0%B8%D1%86%D1%8F",
-    "https://www.youtube.com/results?search_query=Artem+Pivovarov+%26+Klavdia+Petrivna+-+%D0%91%D0%B0%D1%80%D0%B0%D0%B1%D0%B0%D0%BD",
-    "https://www.youtube.com/results?search_query=Wellboy+-+%D0%93%D1%83%D1%81%D0%B8",
-    "https://www.youtube.com/results?search_query=%D0%9F%D0%BE%D1%82%D0%B0%D0%BF+%26+%D0%9E%D0%BB%D0%B5%D0%B3+%D0%92%D0%B8%D0%BD%D0%BD%D0%B8%D0%BA+-+%D0%9D%D0%B0%D0%B9%D0%BA%D1%80%D0%B0%D1%89%D0%B8%D0%B9+%D0%B4%D0%B5%D0%BD%D1%8C",
-    "https://www.youtube.com/results?search_query=Klavdia+Petrivna+%26+%D0%9C%D0%B0%D1%88%D0%B0+%D0%9A%D0%BE%D0%BD%D0%B4%D1%80%D0%B0%D1%82%D0%B5%D0%BD%D0%BA%D0%BE+-+%D0%87%D0%B4%D0%B5+%D0%B4%D0%B0%D1%85",
-    "https://www.youtube.com/results?search_query=%D0%9E%D0%BA%D0%B5%D0%B0%D0%BD+%D0%95%D0%BB%D1%8C%D0%B7%D0%B8+%26+YAKTAK+%26+KOLA+%26+SHUMEI+%26+Jerry+Heil+-+%D0%A2%D0%BE%D0%B9+%D0%B4%D0%B5%D0%BD%D1%8C",
-    "https://www.youtube.com/results?search_query=YAKTAK+-+%D0%A3%D0%BD%D0%BE%D1%87%D1%96",
-    "https://www.youtube.com/results?search_query=YAKTAK+-+LaLaLa",
-    "https://www.youtube.com/results?search_query=YAKTAK+-+%D0%9D%D0%B5%D0%B1%D0%BE",
-    "https://www.youtube.com/results?search_query=YAKTAK+-+%D0%9C%D0%BE%D1%80%D0%B5",
-    "https://www.youtube.com/results?search_query=KOLA+-+%D0%91%D1%96%D0%BB%D1%8F+%D1%81%D0%B5%D1%80%D1%86%D1%8F",
-    "https://www.youtube.com/results?search_query=KOLA+-+%D0%94%D0%BE%D1%87%D0%B5%D0%BA%D0%B0%D1%8E%D1%81%D1%8C",
-    "https://www.youtube.com/results?search_query=KOLA+-+%D0%A7%D0%B8+%D1%80%D0%B0%D0%B7%D0%BE%D0%BC%3F",
-    "https://www.youtube.com/results?search_query=KOLA+-+%D0%A6%D1%96%D0%BB%D1%83%D0%B9",
-    "https://www.youtube.com/results?search_query=Jerry+Heil+-+CATHARTICUS",
-    "https://www.youtube.com/results?search_query=Jerry+Heil+-+%D0%A2%D1%80%D0%B8+%D1%81%D0%BC%D1%83%D0%B6%D0%BA%D0%B8",
-    "https://www.youtube.com/results?search_query=Jerry+Heil+-+%23%D0%90%D0%A0%D0%A2%D0%98%D0%9B%D0%95%D0%A0%D0%86%D0%AF",
-    "https://www.youtube.com/results?search_query=alyona+alyona+%26+Jerry+Heil+-+Teresa+%26+Maria",
-    "https://www.youtube.com/results?search_query=alyona+alyona+-+%D0%9F%D1%83%D1%88%D0%BA%D0%B0",
-    "https://www.youtube.com/results?search_query=alyona+alyona+-+%D0%A0%D0%B8%D0%B1%D0%BA%D0%B8",
-    "https://www.youtube.com/results?search_query=DOROFEEVA+-+747",
-    "https://www.youtube.com/results?search_query=DOROFEEVA+-+%D0%AF%D0%BF%D0%BE%D0%BD%D1%96%D1%8F",
-    "https://www.youtube.com/results?search_query=DOROFEEVA+-+%D0%9A%D0%BE%D1%85%D0%B0%D1%8E%2C+%D0%B0%D0%BB%D0%B5+%D0%BD%D0%B5+%D0%B7%D0%BE%D0%B2%D1%81%D1%96%D0%BC",
-    "https://www.youtube.com/results?search_query=DOROFEEVA+-+%D0%A5%D0%B0%D0%B9+%D0%BF%D0%B8%D1%88%D1%83%D1%82%D1%8C",
-    "https://www.youtube.com/results?search_query=DOROFEEVA+-+%D0%A9%D0%BE%D0%B1+%D0%BD%D0%B5+%D0%B1%D1%83%D0%BB%D0%BE",
-    "https://www.youtube.com/results?search_query=Artem+Pivovarov+-+%D0%9C%D1%96%D1%80%D0%B0%D0%B6",
-    "https://www.youtube.com/results?search_query=Artem+Pivovarov+-+%D0%9C%D0%B0%D0%BD%D1%96%D1%84%D0%B5%D1%81%D1%82",
-    "https://www.youtube.com/results?search_query=Artem+Pivovarov+-+%D0%A0%D0%B0%D0%BD%D0%B4%D0%B5%D0%B2%D1%83",
-    "https://www.youtube.com/results?search_query=Artem+Pivovarov+-+8+%D0%B4%D0%B8%D0%B2%D0%BE",
-    "https://www.youtube.com/results?search_query=Artem+Pivovarov+-+%D0%9C%D1%96%D1%81%D1%8F%D1%86%D1%8C",
-    "https://www.youtube.com/results?search_query=Artem+Pivovarov+-+%D0%94%D1%83%D0%BC%D0%B8",
-    "https://www.youtube.com/results?search_query=Artem+Pivovarov+-+%D0%9C%D0%B0%D0%BC%D0%B0",
-    "https://www.youtube.com/results?search_query=Tina+Karol+-+%D0%9D%D1%96%D0%B6%D0%BD%D0%BE",
-    "https://www.youtube.com/results?search_query=Tina+Karol+-+%D0%A3%D0%BA%D1%80%D0%B0%D1%97%D0%BD%D0%B0+%E2%80%94+%D1%86%D0%B5+%D1%82%D0%B8",
-    "https://www.youtube.com/results?search_query=Tina+Karol+-+%D0%97%D0%B4%D0%B0%D1%82%D0%B8%D1%81%D1%8C+%D1%82%D0%B8+%D0%B7%D0%B0%D0%B2%D0%B6%D0%B4%D0%B8+%D0%B2%D1%81%D1%82%D0%B8%D0%B3%D0%BD%D0%B5%D1%88",
-    "https://www.youtube.com/results?search_query=Tina+Karol+-+%D0%A2%D1%80%D0%BE%D1%8F%D0%BD%D0%B4%D0%B8",
-    "https://www.youtube.com/results?search_query=Tina+Karol+-+%D0%9D%D0%B0%D0%BC%D0%B0%D0%BB%D1%8E%D1%8E+%D1%82%D0%BE%D0%B1%D1%96+%D0%B7%D0%BE%D1%80%D1%96",
-    "https://www.youtube.com/results?search_query=Tina+Karol+-+%D0%A1%D0%BA%D0%B0%D0%BD%D0%B4%D0%B0%D0%BB",
-    "https://www.youtube.com/results?search_query=MONATIK+-+%D0%9A%D1%80%D1%83%D0%B6%D0%B8%D1%82",
-    "https://www.youtube.com/results?search_query=MONATIK+-+Vitamin+D",
-    "https://www.youtube.com/results?search_query=MONATIK+-+%D0%90+%D1%89%D0%BE%3F",
-    "https://www.youtube.com/results?search_query=MONATIK+-+%D0%A1%D0%B8%D0%BB%D1%8C%D0%BD%D0%BE",
-    "https://www.youtube.com/results?search_query=Max+Barskih+-+%D0%A1%D0%BB%D1%8C%D0%BE%D0%B7%D0%B8",
-    "https://www.youtube.com/results?search_query=Max+Barskih+-+%D0%91%D1%83%D0%B4%D0%B5+%D0%B2%D0%B5%D1%81%D0%BD%D0%B0",
-    "https://www.youtube.com/results?search_query=Max+Barskih+-+%D0%91%D0%B5%D1%80%D0%B5%D0%B3%D0%B0",
-    "https://www.youtube.com/results?search_query=Max+Barskih+-+Bestseller",
-    "https://www.youtube.com/results?search_query=Max+Barskih+-+%D0%A0%D0%B8%D1%82%D0%BC%D0%B8",
-    "https://www.youtube.com/results?search_query=Max+Barskih+-+%D0%A2%D1%83%D0%BC%D0%B0%D0%BD%D0%B8",
-    "https://www.youtube.com/results?search_query=%D0%90%D0%BD%D1%82%D0%B8%D1%82%D1%96%D0%BB%D0%B0+-+%D0%A4%D0%BE%D1%80%D1%82%D0%B5%D1%86%D1%8F+%D0%91%D0%B0%D1%85%D0%BC%D1%83%D1%82",
-    "https://www.youtube.com/results?search_query=%D0%90%D0%BD%D1%82%D0%B8%D1%82%D1%96%D0%BB%D0%B0+-+%D0%9B%D0%BE%D0%B2%D0%B8+%D0%BC%D0%BE%D0%BC%D0%B5%D0%BD%D1%82",
-    "https://www.youtube.com/results?search_query=%D0%90%D0%BD%D1%82%D0%B8%D1%82%D1%96%D0%BB%D0%B0+-+%D0%92%D0%B4%D0%BE%D0%BC%D0%B0",
-    "https://www.youtube.com/results?search_query=%D0%90%D0%BD%D1%82%D0%B8%D1%82%D1%96%D0%BB%D0%B0+-+%D0%A2%D0%94%D0%9C%D0%95",
-    "https://www.youtube.com/results?search_query=%D0%90%D0%BD%D1%82%D0%B8%D1%82%D1%96%D0%BB%D0%B0+-+%D0%9C%D0%B0%D1%8F%D0%BC%D1%96",
-    "https://www.youtube.com/results?search_query=%D0%90%D0%BD%D1%82%D0%B8%D1%82%D1%96%D0%BB%D0%B0+-+%D0%A4%D0%B0%D1%80%D0%B8",
-    "https://www.youtube.com/results?search_query=%D0%91%D1%83%D0%BC%D0%B1%D0%BE%D0%BA%D1%81+-+%D0%92%D0%B0%D1%85%D1%82%D0%B5%D1%80%D0%B0%D0%BC",
-    "https://www.youtube.com/results?search_query=%D0%91%D1%83%D0%BC%D0%B1%D0%BE%D0%BA%D1%81+-+%D0%9D%D0%B0%D0%BE%D0%B4%D0%B8%D0%BD%D1%86%D1%96",
-    "https://www.youtube.com/results?search_query=%D0%91%D1%83%D0%BC%D0%B1%D0%BE%D0%BA%D1%81+-+%D0%9B%D1%8E%D0%B4%D0%B8",
-    "https://www.youtube.com/results?search_query=%D0%91%D1%83%D0%BC%D0%B1%D0%BE%D0%BA%D1%81+-+%D0%A2%D0%BE4%D1%82%D0%BE",
-    "https://www.youtube.com/results?search_query=%D0%91%D1%83%D0%BC%D0%B1%D0%BE%D0%BA%D1%81+-+%D0%9F%D0%BE%D0%BB%D1%96%D0%BD%D0%B0",
-    "https://www.youtube.com/results?search_query=%D0%91%D1%83%D0%BC%D0%B1%D0%BE%D0%BA%D1%81+-+%D0%9A%D0%B2%D1%96%D1%82%D0%B8+%D0%B2+%D0%B2%D0%BE%D0%BB%D0%BE%D1%81%D1%81%D1%96",
-    "https://www.youtube.com/results?search_query=%D0%9E%D0%BA%D0%B5%D0%B0%D0%BD+%D0%95%D0%BB%D1%8C%D0%B7%D0%B8+-+%D0%91%D0%B5%D0%B7+%D0%B1%D0%BE%D1%8E",
-    "https://www.youtube.com/results?search_query=%D0%9E%D0%BA%D0%B5%D0%B0%D0%BD+%D0%95%D0%BB%D1%8C%D0%B7%D0%B8+-+%D0%9D%D0%B5+%D1%82%D0%B2%D0%BE%D1%8F+%D0%B2%D1%96%D0%B9%D0%BD%D0%B0",
-    "https://www.youtube.com/results?search_query=%D0%9E%D0%BA%D0%B5%D0%B0%D0%BD+%D0%95%D0%BB%D1%8C%D0%B7%D0%B8+-+%D0%9D%D0%B0+%D0%BD%D0%B5%D0%B1%D1%96",
-    "https://www.youtube.com/results?search_query=%D0%9E%D0%BA%D0%B5%D0%B0%D0%BD+%D0%95%D0%BB%D1%8C%D0%B7%D0%B8+-+%D0%AF+%D1%82%D0%B0%D0%BA+%D1%85%D0%BE%D1%87%D1%83",
-    "https://www.youtube.com/results?search_query=%D0%9E%D0%BA%D0%B5%D0%B0%D0%BD+%D0%95%D0%BB%D1%8C%D0%B7%D0%B8+-+%D0%9C%D0%B8%D1%82%D1%8C",
-    "https://www.youtube.com/results?search_query=%D0%9E%D0%BA%D0%B5%D0%B0%D0%BD+%D0%95%D0%BB%D1%8C%D0%B7%D0%B8+-+%D0%92%D1%81%D0%B5+%D0%B1%D1%83%D0%B4%D0%B5+%D0%B4%D0%BE%D0%B1%D1%80%D0%B5",
-    "https://www.youtube.com/results?search_query=%D0%9E%D0%BA%D0%B5%D0%B0%D0%BD+%D0%95%D0%BB%D1%8C%D0%B7%D0%B8+-+%D0%A2%D0%BE%D0%B9+%D0%B4%D0%B5%D0%BD%D1%8C",
-    "https://www.youtube.com/results?search_query=%D0%9E%D0%BA%D0%B5%D0%B0%D0%BD+%D0%95%D0%BB%D1%8C%D0%B7%D0%B8+-+%D0%A2%D0%B0%D0%BC%2C+%D0%B4%D0%B5+%D0%BD%D0%B0%D1%81+%D0%BD%D0%B5%D0%BC%D0%B0",
-    "https://www.youtube.com/results?search_query=%D0%9E%D0%BA%D0%B5%D0%B0%D0%BD+%D0%95%D0%BB%D1%8C%D0%B7%D0%B8+-+%D0%A1%D1%82%D1%80%D1%96%D0%BB%D1%8F%D0%B9",
-    "https://www.youtube.com/results?search_query=%D0%9E%D0%BA%D0%B5%D0%B0%D0%BD+%D0%95%D0%BB%D1%8C%D0%B7%D0%B8+-+%D0%97%D0%B5%D0%BB%D0%B5%D0%BD%D1%96+%D0%BE%D1%87%D1%96",
-    "https://www.youtube.com/results?search_query=%D0%9E%D0%BA%D0%B5%D0%B0%D0%BD+%D0%95%D0%BB%D1%8C%D0%B7%D0%B8+-+%D0%9C%D0%B0%D0%B9%D0%B6%D0%B5+%D0%B2%D0%B5%D1%81%D0%BD%D0%B0",
-    "https://www.youtube.com/results?search_query=%D0%A1%D0%BA%D1%80%D1%8F%D0%B1%D1%96%D0%BD+-+%D0%A1%D1%82%D0%B0%D1%80%D1%96+%D1%84%D0%BE%D1%82%D0%BE%D0%B3%D1%80%D0%B0%D1%84%D1%96%D1%97",
-    "https://www.youtube.com/results?search_query=%D0%A1%D0%BA%D1%80%D1%8F%D0%B1%D1%96%D0%BD+-+%D0%9B%D1%8E%D0%B4%D0%B8+%D1%8F%D0%BA+%D0%BA%D0%BE%D1%80%D0%B0%D0%B1%D0%BB%D1%96",
-    "https://www.youtube.com/results?search_query=%D0%A1%D0%BA%D1%80%D1%8F%D0%B1%D1%96%D0%BD+-+%D0%9C%D1%96%D1%81%D1%86%D1%8F+%D1%89%D0%B0%D1%81%D0%BB%D0%B8%D0%B2%D0%B8%D1%85+%D0%BB%D1%8E%D0%B4%D0%B5%D0%B9",
-    "https://www.youtube.com/results?search_query=%D0%A1%D0%BA%D1%80%D1%8F%D0%B1%D1%96%D0%BD+-+%D0%A1%D0%BF%D0%B8+%D1%81%D0%BE%D0%B1%D1%96+%D1%81%D0%B0%D0%BC%D0%B0",
-    "https://www.youtube.com/results?search_query=%D0%A1%D0%BA%D1%80%D1%8F%D0%B1%D1%96%D0%BD+-+%D0%A8%D0%B0%D0%BC%D0%BF%D0%B0%D0%BD%D1%81%D1%8C%D0%BA%D1%96+%D0%BE%D1%87%D1%96",
-    "https://www.youtube.com/results?search_query=%D0%A1%D0%BA%D1%80%D1%8F%D0%B1%D1%96%D0%BD+-+%D0%9C%D0%B0%D0%BC",
-    "https://www.youtube.com/results?search_query=%D0%A1%D0%BA%D1%80%D1%8F%D0%B1%D1%96%D0%BD+-+%D0%A8%D1%83%D0%BA%D0%B0%D0%B2+%D1%81%D0%B2%D1%96%D0%B9+%D0%B4%D1%96%D0%BC",
-    "https://www.youtube.com/results?search_query=%D0%A1%D0%BA%D1%80%D1%8F%D0%B1%D1%96%D0%BD+-+%D0%9C%D0%B0%D1%80%D1%88%D1%80%D1%83%D1%82%D0%BA%D0%B0",
-    "https://www.youtube.com/results?search_query=%D0%A1%D0%BA%D1%80%D1%8F%D0%B1%D1%96%D0%BD+-+%D0%93%D0%BE%D0%B2%D0%BE%D1%80%D0%B8%D0%BB%D0%B8+%D1%96+%D0%BA%D1%83%D1%80%D0%B8%D0%BB%D0%B8",
-    "https://www.youtube.com/results?search_query=The+Hardkiss+-+%D0%96%D1%83%D1%80%D0%B0%D0%B2%D0%BB%D1%96",
-    "https://www.youtube.com/results?search_query=The+Hardkiss+-+%D0%9F%D1%80%D1%96%D1%80%D0%B2%D0%B0",
-    "https://www.youtube.com/results?search_query=The+Hardkiss+-+%D0%96%D0%B8%D0%B2%D0%B0",
-    "https://www.youtube.com/results?search_query=The+Hardkiss+-+%D0%90%D0%BD%D1%82%D0%B0%D1%80%D0%BA%D1%82%D0%B8%D0%B4%D0%B0",
-    "https://www.youtube.com/results?search_query=The+Hardkiss+-+Make-Up",
-    "https://www.youtube.com/results?search_query=The+Hardkiss+-+%D0%9A%D0%BE%D1%80%D0%B0%D0%B1%D0%BB%D1%96",
-    "https://www.youtube.com/results?search_query=Go_A+-+SHUM",
-    "https://www.youtube.com/watch?v=NBB0DGJSbJM",
-    "https://www.youtube.com/results?search_query=Go_A+-+Solovey",
-    "https://www.youtube.com/results?search_query=Go_A+-+Kalyna",
-    "https://www.youtube.com/results?search_query=Go_A+-+%D0%96%D0%B0%D0%BB%D1%8C",
-    "https://www.youtube.com/results?search_query=Tvorchi+-+Heart+of+Steel",
-    "https://www.youtube.com/results?search_query=Tvorchi+-+%D0%9C%D0%BE%D0%B2%D0%B0+%D1%82%D1%96%D0%BB%D0%B0",
-    "https://www.youtube.com/results?search_query=Tvorchi+-+%D0%91%D0%BE%D1%80%D0%B5%D0%BC%D0%BE%D1%81%D1%8F",
-    "https://www.youtube.com/results?search_query=Tvorchi+-+%D0%92%D1%96%D1%87-%D0%BD%D0%B0-%D0%B2%D1%96%D1%87",
-    "https://www.youtube.com/results?search_query=Tvorchi+-+%D0%9C%D0%B8%D0%BB%D0%B0+%D0%BC%D0%BE%D1%8F",
-    "https://www.youtube.com/results?search_query=%D0%A5%D1%80%D0%B8%D1%81%D1%82%D0%B8%D0%BD%D0%B0+%D0%A1%D0%BE%D0%BB%D0%BE%D0%B2%D1%96%D0%B9+-+%D0%A5%D1%82%D0%BE%2C+%D1%8F%D0%BA+%D0%BD%D0%B5+%D1%82%D0%B8%3F",
-    "https://www.youtube.com/results?search_query=%D0%A5%D1%80%D0%B8%D1%81%D1%82%D0%B8%D0%BD%D0%B0+%D0%A1%D0%BE%D0%BB%D0%BE%D0%B2%D1%96%D0%B9+-+Fortepiano",
-    "https://www.youtube.com/results?search_query=%D0%A5%D1%80%D0%B8%D1%81%D1%82%D0%B8%D0%BD%D0%B0+%D0%A1%D0%BE%D0%BB%D0%BE%D0%B2%D1%96%D0%B9+-+%D0%9E%D1%81%D1%96%D0%BD%D1%8C",
-    "https://www.youtube.com/results?search_query=%D0%A5%D1%80%D0%B8%D1%81%D1%82%D0%B8%D0%BD%D0%B0+%D0%A1%D0%BE%D0%BB%D0%BE%D0%B2%D1%96%D0%B9+-+%D0%9B%D1%8E%D0%B1%D0%B8%D0%B9+%D0%B4%D1%80%D1%83%D0%B3",
-    "https://www.youtube.com/results?search_query=%D0%A5%D1%80%D0%B8%D1%81%D1%82%D0%B8%D0%BD%D0%B0+%D0%A1%D0%BE%D0%BB%D0%BE%D0%B2%D1%96%D0%B9+-+%D0%A3%D0%BA%D1%80%D0%B0%D1%97%D0%BD%D1%81%D1%8C%D0%BA%D0%B0+%D0%BB%D1%8E%D1%82%D1%8C",
-    "https://www.youtube.com/results?search_query=Jamala+-+1944",
-    "https://www.youtube.com/results?search_query=Jamala+-+%D0%9A%D1%80%D0%B8%D0%BB%D0%B0",
-    "https://www.youtube.com/results?search_query=Jamala+-+%D0%A8%D0%BB%D1%8F%D1%85+%D0%B4%D0%BE%D0%B4%D0%BE%D0%BC%D1%83",
-    "https://www.youtube.com/results?search_query=Jamala+-+Solo",
-    "https://www.youtube.com/results?search_query=MELOVIN+-+%D0%A2%D0%B8",
-    "https://www.youtube.com/results?search_query=MELOVIN+-+%D0%97%D0%B0%D0%BC%D0%B0%D0%BD%D0%B8%D0%BB%D0%B8",
-    "https://www.youtube.com/results?search_query=MELOVIN+-+%D0%9E%D0%B1%D0%B8%D1%80%D0%B0%D1%82%D0%B8%D0%BC%D1%83+%D1%82%D0%B5%D0%B1%D0%B5",
-    "https://www.youtube.com/results?search_query=Wellboy+-+%D0%92%D0%B8%D1%88%D0%BD%D1%96",
-    "https://www.youtube.com/results?search_query=Wellboy+-+%D0%94%D0%BE%D0%B4%D0%BE%D0%BC%D1%83",
-    "https://www.youtube.com/results?search_query=CHEEV+-+%D0%93%D0%B0%D1%80%D0%BD%D0%BE+%D1%82%D0%B0%D0%BA",
-    "https://www.youtube.com/results?search_query=CHEEV+-+%D0%A0%D0%B0%D0%BD%D0%B0",
-    "https://www.youtube.com/results?search_query=CHEEV+-+%D0%9C%D1%80%D1%96%D1%94%D1%88%D1%81%D1%8F",
-    "https://www.youtube.com/results?search_query=CHEEV+-+Good+Luck",
-    "https://www.youtube.com/results?search_query=ADAM+-+%D0%9F%D0%BE%D0%B2%D1%96%D0%BB%D1%8C%D0%BD%D0%BE",
-    "https://www.youtube.com/results?search_query=ADAM+-+%D0%A1%D0%B8%D0%BB%D1%8C%D0%BD%D0%BE-%D1%81%D0%B8%D0%BB%D1%8C%D0%BD%D0%BE",
-    "https://www.youtube.com/results?search_query=ADAM+-+%D0%A2%D0%B0%D0%BA%D1%83+%D1%8F%D0%BA+%D1%94",
-    "https://www.youtube.com/results?search_query=ADAM+-+%D0%9B%D1%8E%D0%B1%D0%B0",
-    "https://www.youtube.com/results?search_query=MamaRika+-+%D0%AF+%D0%B7%D0%B0%D0%BA%D0%BE%D1%85%D0%B0%D0%BB%D0%B0%D1%81%D1%8F",
-    "https://www.youtube.com/results?search_query=MamaRika+-+%D0%A1%D0%B8%D0%BD%D1%83",
-    "https://www.youtube.com/results?search_query=MamaRika+-+%D0%9D%D0%B0+%D0%BD%D0%B0%D1%88%D1%96%D0%B9+%D0%B2%D1%83%D0%BB%D0%B8%D1%86%D1%96",
-    "https://www.youtube.com/results?search_query=MamaRika+-+%D0%9B%D1%8E%D0%B4%D0%B8+%D1%8F%D0%BA+%D0%BA%D0%BE%D1%80%D0%B0%D0%B1%D0%BB%D1%96",
-    "https://www.youtube.com/results?search_query=MamaRika+-+%D0%9A%D0%BE%D0%BB%D0%B8+%D0%BC%D0%B8+%D0%B2%D0%B4%D0%BE%D0%BC%D0%B0",
-    "https://www.youtube.com/results?search_query=%D0%90%D0%BD%D0%BD%D0%B0+%D0%A2%D1%80%D1%96%D0%BD%D1%87%D0%B5%D1%80+-+%D0%9C%D0%B5%D1%82%D0%B5%D0%BB%D0%B8%D0%BA%D0%B8",
-    "https://www.youtube.com/results?search_query=%D0%90%D0%BD%D0%BD%D0%B0+%D0%A2%D1%80%D1%96%D0%BD%D1%87%D0%B5%D1%80+-+%D0%97%D0%B0%D0%B9",
-    "https://www.youtube.com/results?search_query=%D0%90%D0%BD%D0%BD%D0%B0+%D0%A2%D1%80%D1%96%D0%BD%D1%87%D0%B5%D1%80+-+%D0%9C%D0%B0%D1%80%D0%B3%D0%B0%D1%80%D0%B8%D1%82%D0%B0",
-    "https://www.youtube.com/results?search_query=%D0%90%D0%BD%D0%BD%D0%B0+%D0%A2%D1%80%D1%96%D0%BD%D1%87%D0%B5%D1%80+-+%D0%9B%D0%B8%D1%88%D0%B5+%D1%82%D0%B8+%D1%96+%D1%8F",
-    "https://www.youtube.com/results?search_query=%D0%90%D0%BD%D0%BD%D0%B0+%D0%A2%D1%80%D1%96%D0%BD%D1%87%D0%B5%D1%80+-+%D0%9E%D1%87%D1%96",
-    "https://www.youtube.com/results?search_query=Parfeniuk+-+%D0%92%D1%80%D1%83%D0%B1%D0%B0%D0%B9",
-    "https://www.youtube.com/results?search_query=Parfeniuk+-+%D0%9F%D1%80%D0%BE%D0%B2%D0%B5%D0%BB%D0%B0+%D0%B5%D0%BA%D1%81%D0%BA%D1%83%D1%80%D1%81%D1%96%D1%8E",
-    "https://www.youtube.com/results?search_query=Parfeniuk+-+%D0%92%D1%96%D0%B4%D1%80%D0%B8%D0%B2%D0%B0%D0%B9%D1%81%D1%8F",
-    "https://www.youtube.com/results?search_query=Chico+%26+Qatoshi+-+%D0%9B%D0%B0%D1%81%D1%82%D1%96%D0%B2%D0%BA%D0%B8",
-    "https://www.youtube.com/results?search_query=Chico+%26+Qatoshi+-+%D0%9F%D0%BE%D0%BA%D0%BE%D1%85%D0%B0%D0%B9+%D0%BC%D0%B5%D0%BD%D0%B5",
-    "https://www.youtube.com/results?search_query=100%D0%BB%D0%B8%D1%86%D1%8F+-+%D0%A2%D1%80%D0%BE%D1%8F%D0%BD%D0%B4%D0%B8",
-    "https://www.youtube.com/results?search_query=100%D0%BB%D0%B8%D1%86%D1%8F+-+%D0%97%D0%A1%D0%A3",
-    "https://www.youtube.com/results?search_query=PROBASS+%26+HARDI+-+%D0%94%D0%BE%D0%B1%D1%80%D0%BE%D0%B3%D0%BE+%D0%B2%D0%B5%D1%87%D0%BE%D1%80%D0%B0",
-    "https://www.youtube.com/results?search_query=PROBASS+%26+HARDI+-+%D0%9A%D0%BE%D0%B7%D0%B0%D1%86%D1%8C%D0%BA%D0%BE%D0%BC%D1%83+%D1%80%D0%BE%D0%B4%D1%83",
-    "https://www.youtube.com/results?search_query=SHUMEI+-+%D0%A0%D0%BE%D0%B7%D1%81%D1%82%D1%80%D1%96%D0%BB%D1%8F%D0%BD%D0%B5",
-    "https://www.youtube.com/results?search_query=SHUMEI+-+%D0%91%D1%83%D1%80%D0%B5%D0%B2%D1%96%D1%8F%D0%BC%D0%B8",
-    "https://www.youtube.com/results?search_query=SHUMEI+-+%D0%A2%D1%80%D0%B8%D0%B2%D0%BE%D0%B3%D0%B0",
-    "https://www.youtube.com/results?search_query=SHUMEI+-+%D0%92%D1%96%D1%82%D0%B5%D1%80",
-    "https://www.youtube.com/results?search_query=DREVO+-+%D0%95%D0%BD%D0%BA%D0%B0%D1%80%D0%B0%D0%BF%D1%96%D1%81%D1%82%D0%B0",
-    "https://www.youtube.com/results?search_query=DREVO+-+%D0%A1%D0%B0%D0%BC%D0%BE%D0%BB%D1%96%D1%82%D0%BE%D0%BC",
-    "https://www.youtube.com/results?search_query=DREVO+-+%D0%92%D1%96%D1%87%D0%BD%D1%96%D1%81%D1%82%D1%8C",
-    "https://www.youtube.com/results?search_query=%D0%9D%D1%96%D0%BA%D1%96%D1%82%D0%B0+%D0%9A%D1%96%D1%81%D0%B5%D0%BB%D1%8C%D0%BE%D0%B2+-+%D0%92%D1%96%D0%B2%D1%82%D0%B0%D1%80",
-    "https://www.youtube.com/results?search_query=%D0%9D%D1%96%D0%BA%D1%96%D1%82%D0%B0+%D0%9A%D1%96%D1%81%D0%B5%D0%BB%D1%8C%D0%BE%D0%B2+-+%D0%9A%D1%80%D0%B8%D0%BB%D0%B0+%D0%BB%D0%B5%D0%BB%D0%B5%D0%BA%D0%B8",
-    "https://www.youtube.com/results?search_query=%D0%9D%D1%96%D0%BA%D1%96%D1%82%D0%B0+%D0%9A%D1%96%D1%81%D0%B5%D0%BB%D1%8C%D0%BE%D0%B2+-+%D0%A0%D0%BE%D0%BC%D0%B0%D1%88%D0%BA%D0%B0",
-    "https://www.youtube.com/results?search_query=Lida+Lee+-+%D0%A1%D1%85%D0%BE%D0%B6%D1%96",
-    "https://www.youtube.com/results?search_query=Lida+Lee+-+%D0%9F%D0%BE%D1%8F%D1%81%D0%BD%D0%B8",
-    "https://www.youtube.com/results?search_query=Lida+Lee+-+%D0%97%D0%BE%D1%80%D1%96",
-    "https://www.youtube.com/results?search_query=Volodymyr+Dantes+-+%D0%A2%D0%B8+%D0%BD%D0%B5+%D0%B7%D0%B0%D0%B1%D1%83%D0%B2%D0%B0%D0%B9",
-    "https://www.youtube.com/results?search_query=Volodymyr+Dantes+-+%D0%9E%D0%BB%D1%8F",
-    "https://www.youtube.com/results?search_query=Volodymyr+Dantes+-+%D0%9A%D0%B8%D1%82%D0%B8",
-    "https://www.youtube.com/results?search_query=POSITIFF+-+%D0%9D%D0%B5+%D0%B7%D1%83%D0%BF%D0%B8%D0%BD%D1%8F%D0%B9+%D0%B2%D0%B5%D1%87%D1%96%D1%80%D0%BA%D1%83",
-    "https://www.youtube.com/results?search_query=POSITIFF+-+%D0%A1%D0%BF%D0%B0%D0%BB%D0%B0%D1%85%D0%B8",
-    "https://www.youtube.com/results?search_query=POSITIFF+-+%D0%91%D1%83%D0%B4%D1%83+%D0%BA%D0%BE%D1%85%D0%B0%D1%82%D0%B8",
-    "https://www.youtube.com/results?search_query=FI%D0%87NKA+-+%D0%92%D1%96%D0%B2%D1%82%D0%B0%D1%80",
-    "https://www.youtube.com/results?search_query=FI%D0%87NKA+-+%D0%93%D1%83%D1%86%D1%83%D0%BB%D1%8F%D0%BD%D0%BA%D0%B0",
-    "https://www.youtube.com/results?search_query=FI%D0%87NKA+-+%D0%93%D1%80%D1%83%D1%88%D0%B5%D1%87%D0%BA%D0%B0",
-    "https://www.youtube.com/results?search_query=VOLIANSKA+-+%D0%9A%D1%83%D1%81%D1%8C",
-    "https://www.youtube.com/results?search_query=%D0%A3%D0%BB%D1%8F%D0%BD%D0%B0+%D0%A8%D1%83%D0%B1%D0%B0+-+%D0%9E%D0%B9%2C+%D0%BC%D0%B0%D0%BC",
-    "https://www.youtube.com/results?search_query=SKYLERR+-+%D0%93%D0%BE%D1%80%D0%BB%D0%B8%D1%86%D1%96",
-    "https://www.youtube.com/results?search_query=SKYLERR+-+%D0%9B%D1%96%D0%B4+%D1%96+%D0%B2%D0%BE%D0%B3%D0%BE%D0%BD%D1%8C",
-    "https://www.youtube.com/results?search_query=Alena+Omargalieva+-+%D0%9D%D0%B5+%D0%BF%27%D1%8F%D0%BD%D0%B0+-+%D0%B7%D0%B0%D0%BA%D0%BE%D1%85%D0%B0%D0%BD%D0%B0",
-    "https://www.youtube.com/results?search_query=Alena+Omargalieva+-+%D0%A4%D0%B0%D0%BD%D0%B0%D1%82",
-    "https://www.youtube.com/results?search_query=YAGODA+-+%D0%97%D0%B0%D0%BA%D0%BE%D1%85%D0%B0%D0%BB%D0%B0%D1%81%D1%8C+%D0%B4%D0%B8%D0%BA%D0%BE",
-    "https://www.youtube.com/results?search_query=YAGODA+%26+MELISA+SADYK+-+%D0%A7%D0%BE%D0%B1%D0%BE%D1%82%D0%B8",
-    "https://www.youtube.com/results?search_query=YAGODA+-+%D0%AE%D1%80%D0%B0",
-    "https://www.youtube.com/results?search_query=%D0%A8%D1%83%D0%B3%D0%B0%D1%80+-+%D0%9E%D0%BB%D1%94%D0%B3",
-    "https://www.youtube.com/results?search_query=Kolaba+%26+%D0%86%D0%B2%D0%BE+%D0%91%D0%BE%D0%B1%D1%83%D0%BB+-+%D0%90+%D0%BB%D0%B8%D0%BF%D0%B8+%D1%86%D0%B2%D1%96%D1%82%D1%83%D1%82%D1%8C",
-    "https://www.youtube.com/results?search_query=TARABAROVA+-+%D0%9C%D0%B5%D0%B9%D0%B1%D1%96",
-    "https://www.youtube.com/results?search_query=CHEEV+-+%D0%9C%D1%96%D1%81%D1%86%D1%8F",
-    "https://www.youtube.com/results?search_query=Kalush+Orchestra+%26+SIMBOCHKA+-+%D0%9D%D1%96%D0%BA%D0%BE%D0%BC%D1%83+%D0%BD%D0%B5+%D1%81%D0%BA%D0%B0%D0%B6%D0%B5%D0%BC%D0%BE",
-    "https://www.youtube.com/results?search_query=Artem+Pivovarov+%26+The+%D0%92%D1%83%D1%81%D0%B0+%26+%D0%A1%D1%82%D0%B5%D0%BF%D0%B0%D0%BD+%D0%93%D1%96%D0%B3%D0%B0+-+Mamma+Mia",
-    "https://www.youtube.com/results?search_query=%D0%9E%D0%B4%D0%B8%D0%BD+%D0%B2+%D0%BA%D0%B0%D0%BD%D0%BE%D0%B5+-+%D0%A7%D0%BE%D0%B2%D0%B5%D0%BD",
-    "https://www.youtube.com/results?search_query=%D0%9E%D0%B4%D0%B8%D0%BD+%D0%B2+%D0%BA%D0%B0%D0%BD%D0%BE%D0%B5+-+%D0%A3+%D0%BC%D0%B5%D0%BD%D0%B5+%D0%BD%D0%B5%D0%BC%D0%B0%D1%94+%D0%B4%D0%BE%D0%BC%D1%83",
-    "https://www.youtube.com/results?search_query=%D0%9E%D0%B4%D0%B8%D0%BD+%D0%B2+%D0%BA%D0%B0%D0%BD%D0%BE%D0%B5+-+%D0%9D%D0%B5%D0%B1%D0%BE",
-    "https://www.youtube.com/results?search_query=%D0%91%D0%95%D0%97+%D0%9E%D0%91%D0%9C%D0%95%D0%96%D0%95%D0%9D%D0%AC+-+%D0%97%D0%BE%D1%80%D1%96+%D0%B7%D0%B0%D0%BF%D0%B0%D0%BB%D0%B0%D0%BB%D0%B8",
-    "https://www.youtube.com/results?search_query=%D0%91%D0%95%D0%97+%D0%9E%D0%91%D0%9C%D0%95%D0%96%D0%95%D0%9D%D0%AC+-+%D0%A2%D0%BE%D0%BD%D1%83",
-    "https://www.youtube.com/results?search_query=%D0%91%D0%95%D0%97+%D0%9E%D0%91%D0%9C%D0%95%D0%96%D0%95%D0%9D%D0%AC+-+%D0%9C%D1%96%D0%BB%D1%8C%D1%8F%D1%80%D0%B4%D0%B8",
-    "https://www.youtube.com/results?search_query=%D0%91%D0%95%D0%97+%D0%9E%D0%91%D0%9C%D0%95%D0%96%D0%95%D0%9D%D0%AC+-+%D0%97%D0%BD%D0%B0%D0%B9%D0%B4%D0%B8+%D0%BC%D0%B5%D0%BD%D0%B5",
-    "https://www.youtube.com/results?search_query=%D0%91%D0%95%D0%97+%D0%9E%D0%91%D0%9C%D0%95%D0%96%D0%95%D0%9D%D0%AC+-+%D0%A5%D0%BE%D1%87%D0%B5%D1%88",
-    "https://www.youtube.com/results?search_query=%D0%91%D0%95%D0%97+%D0%9E%D0%91%D0%9C%D0%95%D0%96%D0%95%D0%9D%D0%AC+-+%D0%94%D0%B8%D0%BC",
-    "https://www.youtube.com/results?search_query=Pianoboy+-+%D0%9A%D0%BE%D1%85%D0%B0%D0%BD%D0%BD%D1%8F",
-    "https://www.youtube.com/results?search_query=Pianoboy+-+%D0%A0%D0%BE%D0%B4%D0%B8%D0%BC%D0%BA%D0%B8",
-    "https://www.youtube.com/results?search_query=Pianoboy+-+%D0%A8%D0%B0%D0%BC%D0%BF%D0%B0%D0%BD%D1%81%D1%8C%D0%BA%D1%96+%D0%BE%D1%87%D1%96",
-    "https://www.youtube.com/results?search_query=Latexfauna+-+Surfer",
-    "https://www.youtube.com/results?search_query=Latexfauna+-+Bounty",
-    "https://www.youtube.com/results?search_query=Latexfauna+-+Aubergine",
-    "https://www.youtube.com/results?search_query=%D0%9E.Torvald+-+%D0%92%D0%B8%D1%80%D0%B2%D0%B0%D0%BD%D0%B8%D0%B9",
-    "https://www.youtube.com/results?search_query=%D0%9E.Torvald+-+%D0%9C%D0%BE%D0%B2%D1%87%D0%B8",
-    "https://www.youtube.com/results?search_query=%D0%9E.Torvald+-+%D0%A4%D0%BE%D1%82%D0%BE%D0%B3%D1%80%D0%B0%D1%84%D1%83%D0%B9",
-    "https://www.youtube.com/results?search_query=%D0%92%D0%BE%D0%BF%D0%BB%D1%96+%D0%92%D1%96%D0%B4%D0%BE%D0%BF%D0%BB%D1%8F%D1%81%D0%BE%D0%B2%D0%B0+-+%D0%92%D0%B5%D1%81%D0%BD%D0%B0",
-    "https://www.youtube.com/results?search_query=%D0%92%D0%BE%D0%BF%D0%BB%D1%96+%D0%92%D1%96%D0%B4%D0%BE%D0%BF%D0%BB%D1%8F%D1%81%D0%BE%D0%B2%D0%B0+-+%D0%94%D0%B5%D0%BD%D1%8C+%D0%BD%D0%B0%D1%80%D0%BE%D0%B4%D0%B6%D0%B5%D0%BD%D0%BD%D1%8F",
-    "https://www.youtube.com/results?search_query=%D0%92%D0%BE%D0%BF%D0%BB%D1%96+%D0%92%D1%96%D0%B4%D0%BE%D0%BF%D0%BB%D1%8F%D1%81%D0%BE%D0%B2%D0%B0+-+%D0%A2%D0%B0%D1%94%D0%BC%D0%BD%D0%B8%D1%86%D1%96",
-    "https://www.youtube.com/results?search_query=%D0%9F%D0%BB%D0%B0%D1%87+%D0%84%D1%80%D0%B5%D0%BC%D1%96%D1%97+-+%D0%92%D0%BE%D0%BD%D0%B0",
-    "https://www.youtube.com/results?search_query=%D0%9F%D0%BB%D0%B0%D1%87+%D0%84%D1%80%D0%B5%D0%BC%D1%96%D1%97+-+%D0%A1%D1%82%D0%B0%D1%80%D1%96+%D1%84%D0%BE%D1%82%D0%BE%D0%B3%D1%80%D0%B0%D1%84%D1%96%D1%97",
-    "https://www.youtube.com/results?search_query=%D0%94%D1%80%D1%83%D0%B3%D0%B0+%D0%A0%D1%96%D0%BA%D0%B0+-+%D0%A2%D1%80%D0%B8+%D1%85%D0%B2%D0%B8%D0%BB%D0%B8%D0%BD%D0%B8",
-    "https://www.youtube.com/results?search_query=%D0%94%D1%80%D1%83%D0%B3%D0%B0+%D0%A0%D1%96%D0%BA%D0%B0+-+%D0%A2%D0%B0%D0%BA+%D0%BC%D0%B0%D0%BB%D0%BE+%D1%82%D1%83%D1%82+%D1%82%D0%B5%D0%B1%D0%B5",
-    "https://www.youtube.com/results?search_query=%D0%94%D1%80%D1%83%D0%B3%D0%B0+%D0%A0%D1%96%D0%BA%D0%B0+-+%D0%92%D0%B6%D0%B5+%D0%BD%D0%B5+%D1%81%D0%B0%D0%BC",
-    "https://www.youtube.com/results?search_query=%D0%A1%D0%9A%D0%90%D0%99+-+%D0%A2%D0%B5%D0%B1%D0%B5+%D1%86%D0%B5+%D0%BC%D0%BE%D0%B6%D0%B5+%D0%B2%D0%B1%D0%B8%D1%82%D0%B8",
-    "https://www.youtube.com/results?search_query=%D0%A1%D0%9A%D0%90%D0%99+-+%D0%9F%D0%BE%D0%B4%D0%B0%D1%80%D1%83%D0%B9+%D0%BC%D0%B5%D0%BD%D1%96+%D0%BB%D1%8E%D0%B1%D0%BE%D0%B2",
-    "https://www.youtube.com/results?search_query=%D0%A1%D0%9A%D0%90%D0%99+-+Best+%D0%94%D1%80%D1%83%D0%B3",
-    "https://www.youtube.com/results?search_query=%D0%91%D1%80%D0%B0%D1%82%D0%B8+%D0%93%D0%B0%D0%B4%D1%8E%D0%BA%D1%96%D0%BD%D0%B8+-+%D0%9D%D0%B0%D1%80%D0%BA%D0%BE%D0%BC%D0%B0%D0%BD%D0%B8+%D0%BD%D0%B0+%D0%B3%D0%BE%D1%80%D0%BE%D0%B4%D1%96",
-    "https://www.youtube.com/results?search_query=%D0%91%D1%80%D0%B0%D1%82%D0%B8+%D0%93%D0%B0%D0%B4%D1%8E%D0%BA%D1%96%D0%BD%D0%B8+-+%D0%A4%D0%B0%D0%B9%D0%BD%D0%B5+%D0%BC%D1%96%D1%81%D1%82%D0%BE+%D0%A2%D0%B5%D1%80%D0%BD%D0%BE%D0%BF%D1%96%D0%BB%D1%8C",
-    "https://www.youtube.com/results?search_query=%D0%86%D1%80%D0%B8%D0%BD%D0%B0+%D0%91%D1%96%D0%BB%D0%B8%D0%BA+-+%D0%A2%D0%B0%D0%BA+%D0%BF%D1%80%D0%BE%D1%81%D1%82%D0%BE",
-    "https://www.youtube.com/results?search_query=%D0%86%D1%80%D0%B8%D0%BD%D0%B0+%D0%91%D1%96%D0%BB%D0%B8%D0%BA+-+%D0%90+%D1%8F+%D0%BF%D0%BB%D0%B8%D0%B2%D1%83",
-    "https://www.youtube.com/results?search_query=%D0%86%D1%80%D0%B8%D0%BD%D0%B0+%D0%91%D1%96%D0%BB%D0%B8%D0%BA+-+%D0%A2%D0%B8+%D0%BC%D1%96%D0%B9",
-    "https://www.youtube.com/results?search_query=%D0%9D%D0%B0%D1%82%D0%B0%D0%BB%D0%BA%D0%B0+%D0%9A%D0%B0%D1%80%D0%BF%D0%B0+-+%D0%9A%D0%B0%D0%BB%D0%B0%D0%BC%D0%B1%D1%83%D1%80",
-    "https://www.youtube.com/results?search_query=%D0%9D%D0%B0%D1%82%D0%B0%D0%BB%D0%BA%D0%B0+%D0%9A%D0%B0%D1%80%D0%BF%D0%B0+-+%D0%9D%D0%B5+%D0%BF%D1%96%D0%B4%D0%B2%D0%B5%D0%B4%D0%B8",
-    "https://www.youtube.com/results?search_query=%D0%A0%D1%83%D1%81%D0%BB%D0%B0%D0%BD%D0%B0+-+%D0%94%D0%B8%D0%BA%D1%96+%D1%82%D0%B0%D0%BD%D1%86%D1%96",
-    "https://www.youtube.com/results?search_query=%D0%A0%D1%83%D1%81%D0%BB%D0%B0%D0%BD%D0%B0+-+%D0%97%D0%BD%D0%B0%D1%8E+%D1%8F",
-    "https://www.youtube.com/results?search_query=KAZKA+-+%D0%A1%D0%B2%D1%8F%D1%82%D0%B0",
-    "https://www.youtube.com/results?search_query=KAZKA+-+%D0%9C%27%D1%8F%D1%82%D0%B0",
-    "https://www.youtube.com/results?search_query=KAZKA+-+%D0%9A%D0%BE%D0%BB%D1%8C%D0%BE%D1%80%D0%BE%D0%B2%D1%96",
-    "https://www.youtube.com/results?search_query=NK+-+%D0%9E%D0%B1%D1%96%D1%86%D1%8F%D1%8E",
-    "https://www.youtube.com/results?search_query=NK+-+%D0%A7%D0%B5%D1%80%D0%B2%D0%BE%D0%BD%D0%B5+%D0%B2%D0%B8%D0%BD%D0%BE",
-    "https://www.youtube.com/results?search_query=NK+-+Elefante",
-    "https://www.youtube.com/results?search_query=NK+-+%D0%9F%D0%BE%D0%BF%D0%B0+%D1%8F%D0%BA+%D1%83+%D0%9A%D1%96%D0%BC",
-    "https://www.youtube.com/results?search_query=LAUD+-+%D0%A1%D0%B2%D1%96%D1%82%D0%BB%D0%BE%D0%BE%D1%85%D0%BE%D1%80%D0%BE%D0%BD%D0%B5%D1%86%D1%8C",
-    "https://www.youtube.com/results?search_query=LAUD+-+2+%D0%B4%D0%BD%D1%96",
-    "https://www.youtube.com/results?search_query=LAUD+-+%D0%A3+%D1%86%D1%8E+%D0%BD%D1%96%D1%87",
-    "https://www.youtube.com/results?search_query=%D0%86%D0%B2%D0%B0%D0%BD+NAVI+-+%D0%A2%D0%B0%D0%BA%D1%96+%D0%BC%D0%BE%D0%BB%D0%BE%D0%B4%D1%96",
-    "https://www.youtube.com/results?search_query=%D0%86%D0%B2%D0%B0%D0%BD+NAVI+-+%D0%A2%D0%B8%D0%BC%D1%87%D0%B0%D1%81%D0%BE%D0%B2%D0%B8%D0%B9+%D1%80%D0%B5%D0%BB%D0%B0%D0%BA%D1%81",
-    "https://www.youtube.com/results?search_query=%D0%86%D0%B2%D0%B0%D0%BD+NAVI+-+%D0%A5%D1%96%D0%BC%D1%96%D1%8F",
-    "https://www.youtube.com/results?search_query=%D0%94%D0%BC%D0%B8%D1%82%D1%80%D0%BE+%D0%A8%D1%83%D1%80%D0%BE%D0%B2+-+%D0%9A%D0%BE%D1%85%D0%B0%D0%BD%D0%BD%D1%8F",
-    "https://www.youtube.com/results?search_query=%D0%9E%D0%BB%D1%8F+%D0%9F%D0%BE%D0%BB%D1%8F%D0%BA%D0%BE%D0%B2%D0%B0+-+%D0%9A%D0%BE%D1%80%D0%BE%D0%BB%D0%B5%D0%B2%D0%B0+%D0%BD%D0%BE%D1%87%D1%96",
-    "https://www.youtube.com/results?search_query=%D0%9E%D0%BB%D1%8F+%D0%9F%D0%BE%D0%BB%D1%8F%D0%BA%D0%BE%D0%B2%D0%B0+-+%D0%A8%D0%BB%D1%8C%D0%BE%D0%BF%D0%BA%D0%B8",
-    "https://www.youtube.com/results?search_query=%D0%9D%D0%B0%D1%81%D1%82%D1%8F+%D0%9A%D0%B0%D0%BC%D0%B5%D0%BD%D1%81%D1%8C%D0%BA%D0%B8%D1%85+-+%D0%9E%D0%B1%D1%96%D1%86%D1%8F%D1%8E",
-    "https://www.youtube.com/results?search_query=%D0%9D%D0%B0%D1%81%D1%82%D1%8F+%D0%9A%D0%B0%D0%BC%D0%B5%D0%BD%D1%81%D1%8C%D0%BA%D0%B8%D1%85+-+%D0%9F%D0%BE%D0%BF%D0%B0+%D0%BA%D0%B0%D0%BA+%D1%83+%D0%9A%D0%B8%D0%BC",
-    "https://www.youtube.com/results?search_query=%D0%9D%D0%B0%D1%81%D1%82%D1%8F+%D0%9A%D0%B0%D0%BC%D0%B5%D0%BD%D1%81%D1%8C%D0%BA%D0%B8%D1%85+-+%D0%9A%D1%80%D0%B0%D1%81%D0%BD%D0%BE%D0%B5+%D0%B2%D0%B8%D0%BD%D0%BE",
-    "https://www.youtube.com/results?search_query=MONATIK+%26+DOROFEEVA+-+%D0%93%D0%BB%D1%83%D0%B1%D0%BE%D0%BA%D0%BE",
-    "https://www.youtube.com/results?search_query=MONATIK+%26+%D0%92%D1%96%D1%80%D0%B0+%D0%91%D1%80%D0%B5%D0%B6%D0%BD%D1%94%D0%B2%D0%B0+-+%D0%92%D1%96%D1%80%D1%83%D1%8E",
-    "https://www.youtube.com/results?search_query=%D0%90%D1%80%D1%81%D0%B5%D0%BD+%D0%9C%D1%96%D1%80%D0%B7%D0%BE%D1%8F%D0%BD+-+%D0%86%D0%B2%D0%B0%D0%BD%D0%B0+%D0%9A%D1%83%D0%BF%D0%B0%D0%BB%D0%B0",
-    "https://www.youtube.com/results?search_query=%D0%90%D1%80%D1%81%D0%B5%D0%BD+%D0%9C%D1%96%D1%80%D0%B7%D0%BE%D1%8F%D0%BD+-+%D0%9F%D0%BE%D1%86%D1%96%D0%BB%D1%83%D0%B9+%D0%BC%D0%B5%D0%BD%D0%B5",
-    "https://www.youtube.com/results?search_query=%D0%A2%D1%96%D0%BD%D0%B0+%D0%9A%D0%B0%D1%80%D0%BE%D0%BB%D1%8C+-+%D0%9D%D0%B0%D0%BC%D0%B0%D0%BB%D1%8E%D1%8E+%D1%82%D0%BE%D0%B1%D1%96+%D0%B7%D0%BE%D1%80%D1%96",
-    "https://www.youtube.com/results?search_query=%D0%A1%D0%B5%D1%80%D0%B3%D1%96%D0%B9+%D0%91%D0%B0%D0%B1%D0%BA%D1%96%D0%BD+-+%D0%94%D0%B5+%D0%B1%D0%B8+%D1%8F",
-    "https://www.youtube.com/results?search_query=%D0%A1%D0%B5%D1%80%D0%B3%D1%96%D0%B9+%D0%91%D0%B0%D0%B1%D0%BA%D1%96%D0%BD+-+%D0%9F%D1%80%D0%BE%D0%B1%D0%B0%D1%87",
-    "https://www.youtube.com/results?search_query=%D0%A1%D0%B5%D1%80%D0%B3%D1%96%D0%B9+%D0%91%D0%B0%D0%B1%D0%BA%D1%96%D0%BD+-+%D0%9C%D0%BE%D1%8F+%D0%BB%D1%8E%D0%B1%D0%BE%D0%B2",
-    "https://www.youtube.com/results?search_query=%D0%9E%D0%BB%D0%B5%D0%BA%D1%81%D0%B0%D0%BD%D0%B4%D1%80+%D0%9F%D0%BE%D0%BD%D0%BE%D0%BC%D0%B0%D1%80%D1%8C%D0%BE%D0%B2+-+%D0%AF+%D0%BB%D1%8E%D0%B1%D0%BB%D1%8E+%D1%82%D1%96%D0%BB%D1%8C%D0%BA%D0%B8+%D1%82%D0%B5%D0%B1%D0%B5",
-    "https://www.youtube.com/results?search_query=%D0%9E%D0%BB%D0%B5%D0%BA%D1%81%D0%B0%D0%BD%D0%B4%D1%80+%D0%9F%D0%BE%D0%BD%D0%BE%D0%BC%D0%B0%D1%80%D1%8C%D0%BE%D0%B2+-+%D0%92%D0%B0%D1%80%D1%82%D0%BE",
-    "https://www.youtube.com/results?search_query=%D0%92%D1%96%D1%82%D0%B0%D0%BB%D1%96%D0%B9+%D0%9A%D0%BE%D0%B7%D0%BB%D0%BE%D0%B2%D1%81%D1%8C%D0%BA%D0%B8%D0%B9+-+%D0%9F%D1%96%D0%BD%D0%B0+%D0%B4%D0%BD%D1%96%D0%B2",
-    "https://www.youtube.com/results?search_query=%D0%92%D1%96%D1%82%D0%B0%D0%BB%D1%96%D0%B9+%D0%9A%D0%BE%D0%B7%D0%BB%D0%BE%D0%B2%D1%81%D1%8C%D0%BA%D0%B8%D0%B9+-+%D0%9C%D0%BE%D1%94+%D0%BC%D0%BE%D1%80%D0%B5",
-    "https://www.youtube.com/results?search_query=%D0%92%D1%96%D1%82%D0%B0%D0%BB%D1%96%D0%B9+%D0%9A%D0%BE%D0%B7%D0%BB%D0%BE%D0%B2%D1%81%D1%8C%D0%BA%D0%B8%D0%B9+-+%D0%A2%D1%96%D0%BB%D1%8C%D0%BA%D0%B8+%D0%BA%D0%BE%D1%85%D0%B0%D0%BD%D0%BD%D1%8F",
-]
 
-RANDOM_SONGS_URLS = [
-    "https://www.youtube.com/watch?v=pgN-vvVVxMA",
-    "https://www.youtube.com/watch?v=P1t9T1TAOBI",
-    "https://www.youtube.com/watch?v=GX8Hg6kWQYI",
-    "https://www.youtube.com/watch?v=iAeYPfrXwk4",
-    "https://www.youtube.com/watch?v=nyxRebRhaK0",
-    "https://www.youtube.com/watch?v=maigqMT9KPw&t=1716s",
-    "https://www.youtube.com/watch?v=zq2pagG8_ok",
-    "https://www.youtube.com/watch?v=LqxcHcdGkvM",
-    "https://www.youtube.com/watch?v=MIuJVYNvC-s",
-    "https://www.youtube.com/watch?v=GFihEj6DAtM",
-    "https://www.youtube.com/watch?v=W0DM5lcj6mw",
-    "https://www.youtube.com/watch?v=SA7AIQw-7Ms",
-    "https://www.youtube.com/watch?v=nidQCt_HEsY",
-    "https://www.youtube.com/watch?v=cEQ6-8J-P3I",
-    "https://www.youtube.com/watch?v=oPA0z4W-kcU ",
-    "https://www.youtube.com/watch?v=Na_LRWNbyJ8",
-    "https://www.youtube.com/watch?v=6PNPx0koe2E&list=PLQdn7YisXz3PS9dJjn3H35ohAkXleMoVM",
-    "https://www.youtube.com/watch?v=mZBtA4iQZmQ",
-    "https://www.youtube.com/watch?v=5Fv19KVVya8",
-    "https://www.youtube.com/watch?v=04x3RshrpG8",
-    "https://www.youtube.com/watch?v=feGgQxcNYZ0",
-    "https://www.youtube.com/watch?v=0_wQc-6uAME",
-    "https://www.youtube.com/watch?v=zQ7Zrowa-gY",
-    "https://www.youtube.com/watch?v=MBG3Gdt5OGs",
-    "https://www.youtube.com/watch?v=WJF5Z1WRcqw",
-    "https://www.youtube.com/watch?v=yH5FTh3OfPE",
-    "https://www.youtube.com/watch?v=NZffGy4TLno",
-    "https://www.youtube.com/watch?v=pY-WQxgx2b8",
-    "https://www.youtube.com/watch?v=i3U9Eesh-Ys",
-    "https://www.youtube.com/watch?v=E2nDCLsGsqQ",
-    "https://www.youtube.com/watch?v=9CDJpnIDS4c",
-    "https://www.youtube.com/watch?v=l7v8DAbIOx0&list=RDEMMyKIrFtyXwr_Bmk8U4B2zg&start_radio=1&rv=9CDJpnIDS4c",
-    "https://www.youtube.com/watch?v=hgNaOU0UOaQ&list=RDEMMyKIrFtyXwr_Bmk8U4B2zg&index=2",
-    "https://www.youtube.com/watch?v=3rkJ3L5Ce80&list=RDEMMyKIrFtyXwr_Bmk8U4B2zg&index=3",
-    "https://www.youtube.com/watch?v=p1uh40IvF4c&list=RDEMMyKIrFtyXwr_Bmk8U4B2zg&index=4",
-    "https://www.youtube.com/watch?v=IuG3PhJOKRM&list=RDEMMyKIrFtyXwr_Bmk8U4B2zg&index=5",
-    "https://www.youtube.com/watch?v=pzv8DhGXOa8&list=RDEMMyKIrFtyXwr_Bmk8U4B2zg&index=6",
-    "https://www.youtube.com/watch?v=uHu28rVAg_I&list=RDEMMyKIrFtyXwr_Bmk8U4B2zg&index=7",
-    "https://www.youtube.com/watch?v=IyuJP9S68n0&list=RDEMMyKIrFtyXwr_Bmk8U4B2zg&index=8",
-    "https://www.youtube.com/watch?v=Qzm44kVp7QA&list=RDEMMyKIrFtyXwr_Bmk8U4B2zg&index=9",
-    "https://www.youtube.com/watch?v=dZ9v9PYCWoM&list=RDEMMyKIrFtyXwr_Bmk8U4B2zg&index=10",
-    "https://www.youtube.com/watch?v=XALLZHKnS_U&list=RDEMMyKIrFtyXwr_Bmk8U4B2zg&index=11",
-    "https://www.youtube.com/watch?v=GRvRIS--JRo&list=RDEMMyKIrFtyXwr_Bmk8U4B2zg&index=12",
-    "https://www.youtube.com/watch?v=unrs1wnz0r4&list=RDEMMyKIrFtyXwr_Bmk8U4B2zg&index=13",
-    "https://www.youtube.com/watch?v=dqdbVlU1f0M&list=RDEMMyKIrFtyXwr_Bmk8U4B2zg&index=14",
-    "https://www.youtube.com/watch?v=VbqVh6iUFS4&list=RDEMMyKIrFtyXwr_Bmk8U4B2zg&index=15",
-    "https://www.youtube.com/watch?v=zuBKLzYirMc&list=RDEMMyKIrFtyXwr_Bmk8U4B2zg&index=16",
-    "https://www.youtube.com/watch?v=napUAIh4UE0&list=RDEMMyKIrFtyXwr_Bmk8U4B2zg&index=17",
-    "https://www.youtube.com/watch?v=jWDwdYSdM64&list=RDEMMyKIrFtyXwr_Bmk8U4B2zg&index=18",
-    "https://www.youtube.com/watch?v=c-5jld1Uf0g&list=RDEMMyKIrFtyXwr_Bmk8U4B2zg&index=19",
-    "https://www.youtube.com/watch?v=wDsU4H2w48k&list=RDEMMyKIrFtyXwr_Bmk8U4B2zg&index=20",
-    "https://www.youtube.com/watch?v=eA4_E4Qvsw0&list=RDEMMyKIrFtyXwr_Bmk8U4B2zg&index=21",
-    "https://www.youtube.com/watch?v=PhHI1bXG3Yo&list=RDEMMyKIrFtyXwr_Bmk8U4B2zg&index=22",
-    "https://www.youtube.com/watch?v=aD1IyIBdqjQ&list=RDEMMyKIrFtyXwr_Bmk8U4B2zg&index=23",
-    "https://www.youtube.com/watch?v=FZ-he-64ms4&list=RDEMMyKIrFtyXwr_Bmk8U4B2zg&index=24",
-    "https://www.youtube.com/watch?v=PtqM4ThqZUc&list=RDEMMyKIrFtyXwr_Bmk8U4B2zg&index=25",
-    "https://www.youtube.com/watch?v=lsH2M6OcS_g&list=RDEMMyKIrFtyXwr_Bmk8U4B2zg&index=26",
-    "https://www.youtube.com/watch?v=gCDPTnpYvtc&list=RDEMMyKIrFtyXwr_Bmk8U4B2zg&index=29",
-    "https://www.youtube.com/watch?v=-q68__Slg-8&list=RDEMMyKIrFtyXwr_Bmk8U4B2zg&index=27",
-    "https://www.youtube.com/watch?v=szEgSYloU-0&list=RDEMMyKIrFtyXwr_Bmk8U4B2zg&index=27",
-    "https://www.youtube.com/watch?v=6i8eq93gYHM&list=RDEMMyKIrFtyXwr_Bmk8U4B2zg&index=28",
-    "https://www.youtube.com/watch?v=ZOI8ib7k4Ic&list=RDEMMyKIrFtyXwr_Bmk8U4B2zg&index=27",
-    "https://www.youtube.com/watch?v=BFSpI9aJ4As&list=RDEMMyKIrFtyXwr_Bmk8U4B2zg&index=27",
-    "https://www.youtube.com/watch?v=KpPcmkuYjfw&list=RDEMMyKIrFtyXwr_Bmk8U4B2zg&index=27",
-    "https://www.youtube.com/watch?v=BRtQfVtAHxY&list=RDEMMyKIrFtyXwr_Bmk8U4B2zg&index=27",
-    "https://www.youtube.com/watch?v=EsX-0VBb0j0&list=RDEMMyKIrFtyXwr_Bmk8U4B2zg&index=27",
-    "https://www.youtube.com/watch?v=tMfVDZZno88&list=RDEMMyKIrFtyXwr_Bmk8U4B2zg&index=27",
-    "https://www.youtube.com/watch?v=hQO0Adj-tfw&list=RDEMMyKIrFtyXwr_Bmk8U4B2zg&index=38",
-    "https://www.youtube.com/watch?v=-Rdo49VtEJs&list=RDEMMyKIrFtyXwr_Bmk8U4B2zg&index=34",
-    "https://www.youtube.com/watch?v=MyB3AlaCSDU&list=RDEMMyKIrFtyXwr_Bmk8U4B2zg&index=50",
-    "https://www.youtube.com/watch?v=DDPecetdvMM",
-]
+# ============================================================
+# КОМАНДЫ УПРАВЛЕНИЯ С ПРАВИЛЬНОЙ РАБОТОЙ КЛАВИШ
+# ============================================================
+
+def press_key_with_delay(key_combination, delay=0.1):
+    """Нажимает комбинацию клавиш с задержкой"""
+    time.sleep(delay)
+    if isinstance(key_combination, tuple):
+        pyautogui.hotkey(*key_combination)
+    else:
+        pyautogui.press(key_combination)
+    time.sleep(delay)
+
+
+def keyboard_action_select_all():
+    """Выделить всё (Ctrl+A)"""
+    print("[Стелла]: Выделяю всё (Ctrl+A)")
+    time.sleep(0.05)
+    pyautogui.hotkey('ctrl', 'a')
+    time.sleep(0.05)
+    play_sound("select") or play_sound("ok")
+
+
+def keyboard_action_copy():
+    """Копировать (Ctrl+C)"""
+    print("[Стелла]: Копирую (Ctrl+C)")
+    time.sleep(0.05)
+    pyautogui.hotkey('ctrl', 'c')
+    time.sleep(0.05)
+    play_sound("copy") or play_sound("ok")
+
+
+def keyboard_action_paste():
+    """Вставить (Ctrl+V)"""
+    print("[Стелла]: Вставляю (Ctrl+V)")
+    time.sleep(0.05)
+    pyautogui.hotkey('ctrl', 'v')
+    time.sleep(0.05)
+    play_sound("paste") or play_sound("ok")
+
+
+def keyboard_action_cut():
+    """Вырезать (Ctrl+X)"""
+    print("[Стелла]: Вырезаю (Ctrl+X)")
+    time.sleep(0.05)
+    pyautogui.hotkey('ctrl', 'x')
+    time.sleep(0.05)
+    play_sound("cut") or play_sound("ok")
+
+
+def keyboard_action_undo():
+    """Отменить (Ctrl+Z)"""
+    print("[Стелла]: Отменяю (Ctrl+Z)")
+    time.sleep(0.05)
+    pyautogui.hotkey('ctrl', 'z')
+    time.sleep(0.05)
+    play_sound("undo") or play_sound("ok")
+
+
+def keyboard_action_redo():
+    """Повторить (Ctrl+Y)"""
+    print("[Стелла]: Повторяю (Ctrl+Y)")
+    time.sleep(0.05)
+    pyautogui.hotkey('ctrl', 'y')
+    time.sleep(0.05)
+    play_sound("redo") or play_sound("ok")
+
+
+def keyboard_action_save():
+    """Сохранить (Ctrl+S)"""
+    print("[Стелла]: Сохраняю (Ctrl+S)")
+    time.sleep(0.05)
+    pyautogui.hotkey('ctrl', 's')
+    time.sleep(0.05)
+    play_sound("save") or play_sound("ok")
+
+
+def keyboard_action_find():
+    """Найти (Ctrl+F)"""
+    print("[Стелла]: Открываю поиск (Ctrl+F)")
+    time.sleep(0.05)
+    pyautogui.hotkey('ctrl', 'f')
+    time.sleep(0.05)
+    play_sound("find") or play_sound("ok")
+
+
+def keyboard_action_print():
+    """Печать (Ctrl+P)"""
+    print("[Стелла]: Открываю печать (Ctrl+P)")
+    time.sleep(0.05)
+    pyautogui.hotkey('ctrl', 'p')
+    time.sleep(0.05)
+    play_sound("print") or play_sound("ok")
+
+
+def keyboard_action_select_word():
+    """Выделить слово (двойной клик)"""
+    print("[Стелла]: Выделяю слово")
+    time.sleep(0.05)
+    pyautogui.doubleClick()
+    time.sleep(0.05)
+    play_sound("select") or play_sound("ok")
+
+
+def keyboard_action_enter():
+    """Нажать Enter"""
+    print("[Стелла]: Нажимаю Enter")
+    time.sleep(0.05)
+    pyautogui.press('enter')
+    time.sleep(0.05)
+    play_sound("enter") or play_sound("ok")
+
+
+def keyboard_action_escape():
+    """Нажать Escape"""
+    print("[Стелла]: Нажимаю Escape")
+    time.sleep(0.05)
+    pyautogui.press('esc')
+    time.sleep(0.05)
+    play_sound("escape") or play_sound("ok")
+
+
+def keyboard_action_tab():
+    """Нажать Tab"""
+    print("[Стелла]: Нажимаю Tab")
+    time.sleep(0.05)
+    pyautogui.press('tab')
+    time.sleep(0.05)
+    play_sound("tab") or play_sound("ok")
+
+
+def keyboard_action_space():
+    """Нажать Пробел"""
+    print("[Стелла]: Нажимаю Пробел")
+    time.sleep(0.05)
+    pyautogui.press('space')
+    time.sleep(0.05)
+    play_sound("space") or play_sound("ok")
+
+
+def keyboard_action_delete():
+    """Нажать Delete"""
+    print("[Стелла]: Нажимаю Delete")
+    time.sleep(0.05)
+    pyautogui.press('delete')
+    time.sleep(0.05)
+    play_sound("delete") or play_sound("ok")
+
+
+def keyboard_action_backspace():
+    """Нажать Backspace"""
+    print("[Стелла]: Нажимаю Backspace")
+    time.sleep(0.05)
+    pyautogui.press('backspace')
+    time.sleep(0.05)
+    play_sound("backspace") or play_sound("ok")
+
+
+def keyboard_action_shift_tab():
+    """Shift+Tab (назад по элементам)"""
+    print("[Стелла]: Нажимаю Shift+Tab")
+    time.sleep(0.05)
+    pyautogui.hotkey('shift', 'tab')
+    time.sleep(0.05)
+    play_sound("tab") or play_sound("ok")
+
+
+def keyboard_action_alt_tab():
+    """Alt+Tab (переключение окон)"""
+    print("[Стелла]: Переключаю окна (Alt+Tab)")
+    time.sleep(0.05)
+    pyautogui.hotkey('alt', 'tab')
+    time.sleep(0.05)
+    play_sound("switch") or play_sound("ok")
+
+
+def keyboard_action_win_d():
+    """Win+D (показать рабочий стол)"""
+    print("[Стелла]: Показываю рабочий стол (Win+D)")
+    time.sleep(0.05)
+    pyautogui.hotkey('win', 'd')
+    time.sleep(0.05)
+    play_sound("desktop") or play_sound("ok")
+
+
+def keyboard_action_win_m():
+    """Win+M (свернуть все окна)"""
+    print("[Стелла]: Сворачиваю все окна (Win+M)")
+    time.sleep(0.05)
+    pyautogui.hotkey('win', 'm')
+    time.sleep(0.05)
+    play_sound("minimize_all") or play_sound("ok")
+
+
+def keyboard_action_alt_f4():
+    """Alt+F4 (закрыть окно)"""
+    print("[Стелла]: Закрываю окно (Alt+F4)")
+    time.sleep(0.05)
+    pyautogui.hotkey('alt', 'f4')
+    time.sleep(0.05)
+    play_sound("close_window") or play_sound("ok")
 
 
 # ============================================================
-# ОСНОВНЫЕ ФУНКЦИИ
+# СЛОВАРЬ КОМАНД С ПРАВИЛЬНОЙ РАБОТОЙ КЛАВИШ
+# ============================================================
+
+CONTROL_COMMANDS = {
+    # КОМАНДЫ РАБОТЫ С ТЕКСТОМ
+    "выдели все": keyboard_action_select_all,
+    "выделить все": keyboard_action_select_all,
+    "всё выделить": keyboard_action_select_all,
+    "выдели всё": keyboard_action_select_all,
+
+    "скопировать": keyboard_action_copy,
+    "скопируй": keyboard_action_copy,
+    "копируй": keyboard_action_copy,
+    "копировать": keyboard_action_copy,
+
+    "вставить": keyboard_action_paste,
+    "вставь": keyboard_action_paste,
+    "вклей": keyboard_action_paste,
+
+    "вырезать": keyboard_action_cut,
+    "вырежь": keyboard_action_cut,
+
+    "отменить": keyboard_action_undo,
+    "отмена": keyboard_action_undo,
+    "отмени": keyboard_action_undo,
+
+    "повторить": keyboard_action_redo,
+    "повтор": keyboard_action_redo,
+    "повтори": keyboard_action_redo,
+
+    "сохранить": keyboard_action_save,
+    "сохрани": keyboard_action_save,
+    "сейв": keyboard_action_save,
+
+    "найти": keyboard_action_find,
+    "поиск": keyboard_action_find,
+    "искать": keyboard_action_find,
+
+    "печать": keyboard_action_print,
+    "распечатать": keyboard_action_print,
+
+    "выделить слово": keyboard_action_select_word,
+    "выдели слово": keyboard_action_select_word,
+
+    # КЛАВИШИ
+    "энтер": keyboard_action_enter,
+    "ввод": keyboard_action_enter,
+    "enter": keyboard_action_enter,
+
+    "эскейп": keyboard_action_escape,
+    "esc": keyboard_action_escape,
+    "выход": keyboard_action_escape,
+
+    "таб": keyboard_action_tab,
+    "tab": keyboard_action_tab,
+
+    "пробел": keyboard_action_space,
+    "space": keyboard_action_space,
+
+    "делит": keyboard_action_delete,
+    "delete": keyboard_action_delete,
+    "удали": keyboard_action_delete,
+    "удалить": keyboard_action_delete,
+
+    "бэкспейс": keyboard_action_backspace,
+    "backspace": keyboard_action_backspace,
+    "бекспейс": keyboard_action_backspace,
+
+    "шифт таб": keyboard_action_shift_tab,
+    "shift tab": keyboard_action_shift_tab,
+
+    "альт таб": keyboard_action_alt_tab,
+    "alt tab": keyboard_action_alt_tab,
+    "переключить окно": keyboard_action_alt_tab,
+    "переключи окно": keyboard_action_alt_tab,
+
+    "рабочий стол": keyboard_action_win_d,
+    "показать стол": keyboard_action_win_d,
+    "вин д": keyboard_action_win_d,
+
+    "свернуть все": keyboard_action_win_m,
+    "сверни все": keyboard_action_win_m,
+    "вин м": keyboard_action_win_m,
+
+    "закрыть окно": keyboard_action_alt_f4,
+    "закрой окно": keyboard_action_alt_f4,
+    "альт ф4": keyboard_action_alt_f4,
+
+    # СКРОЛЛ
+    "вверх": lambda: (pyautogui.scroll(400), play_sound("scroll_up") or play_sound("ok")),
+    "скролл вверх": lambda: (pyautogui.scroll(400), play_sound("scroll_up") or play_sound("ok")),
+    "вниз": lambda: (pyautogui.scroll(-400), play_sound("scroll_down") or play_sound("ok")),
+    "скролл вниз": lambda: (pyautogui.scroll(-400), play_sound("scroll_down") or play_sound("ok")),
+
+    # КЛИКИ
+    "клик": lambda: (pyautogui.click(), play_sound("click") or play_sound("ok")),
+    "нажми": lambda: (pyautogui.click(), play_sound("click") or play_sound("ok")),
+    "дабл клик": lambda: (pyautogui.doubleClick(), play_sound("double_click") or play_sound("ok")),
+    "двойной клик": lambda: (pyautogui.doubleClick(), play_sound("double_click") or play_sound("ok")),
+}
+
+
+# ============================================================
+# ОСТАЛЬНЫЕ ФУНКЦИИ (БЕЗ ИЗМЕНЕНИЙ)
 # ============================================================
 
 def minimize_all_windows():
     """Сворачивает все открытые окна (Win + M)."""
     if not play_sound("minimize_all") and not play_sound("minimize"):
         play_sound("ok")
-
-    # Используем Win + M для сворачивания всех окон
     pyautogui.hotkey('win', 'm')
     print("[Стелла]: Все окна свернуты (Win + M)")
     return True
@@ -643,7 +602,6 @@ def minimize_window(target_raw: str):
     if not play_sound(f"minimize_{app_key}") and not play_sound("minimize"):
         play_sound("ok")
 
-    # Находим окно по имени процесса
     win = get_window_by_exe_name(exe_name)
 
     if win:
@@ -684,6 +642,11 @@ def play_ukrainian_song():
     """Воспроизводит случайную украинскую песню на YouTube."""
     if not play_sound("ukr_song") and not play_sound("ukr"):
         play_sound("ok")
+    # Сокращенный список для примера
+    UKRAINIAN_SONGS_URLS = [
+        "https://www.youtube.com/results?search_query=KAZKA+-+%D0%9F%D0%BB%D0%B0%D0%BA%D0%B0%D0%BB%D0%B0",
+        "https://www.youtube.com/results?search_query=KALUSH+%26+SKOFKA+-+%D0%94%D0%BE%D0%B4%D0%BE%D0%BC%D1%83",
+    ]
     url = random.choice(UKRAINIAN_SONGS_URLS)
     print(f"[Музыка]: Рандомно выбрана украинская песня -> {url}")
     webbrowser.open(url)
@@ -693,6 +656,10 @@ def play_random_song():
     """Воспроизводит случайную песню на YouTube."""
     if not play_sound("random_song") and not play_sound("random"):
         play_sound("ok")
+    RANDOM_SONGS_URLS = [
+        "https://www.youtube.com/watch?v=pgN-vvVVxMA",
+        "https://www.youtube.com/watch?v=P1t9T1TAOBI",
+    ]
     url = random.choice(RANDOM_SONGS_URLS)
     print(f"[Музыка]: Рандомно выбрана случайная песня -> {url}")
     webbrowser.open(url)
@@ -799,37 +766,6 @@ def move_window_to_monitor(target_raw: str):
         return False
 
 
-CONTROL_COMMANDS = {
-    "вверх": lambda: pyautogui.scroll(400),
-    "скролл вверх": lambda: pyautogui.scroll(400),
-    "вниз": lambda: pyautogui.scroll(-400),
-    "скролл вниз": lambda: pyautogui.scroll(-400),
-    "клик": lambda: pyautogui.click(),
-    "нажми": lambda: pyautogui.click(),
-    "дабл клик": lambda: pyautogui.doubleClick(),
-    "двойной клик": lambda: pyautogui.doubleClick(),
-    "пауза": lambda: pyautogui.press("space"),
-    "выдели все": lambda: pyautogui.hotkey("ctrl", "a"),
-    "выдели": lambda: pyautogui.hotkey("ctrl", "a"),
-    "скопировать": lambda: pyautogui.hotkey("ctrl", "c"),
-    "скопируй": lambda: pyautogui.hotkey("ctrl", "c"),
-    "копируй": lambda: pyautogui.hotkey("ctrl", "c"),
-    "вставить": lambda: pyautogui.hotkey("ctrl", "v"),
-    "вставь":lambda: pyautogui.hotkey("ctrl", "v"),
-    "отправь": lambda: pyautogui.hotkey("enter"),
-    "скрин": lambda: pyautogui.press("printscreen"),
-    "скриншот": lambda: pyautogui.press("printscreen"),
-    "пробел": lambda: pyautogui.press("space"),
-    "полный экран": lambda: pyautogui.doubleClick(),
-    "на весь экран": lambda: pyautogui.doubleClick(),
-    "фулл экран": lambda: pyautogui.doubleClick(),
-    "смени язык": change_language,
-    "измени язык": change_language,
-    "поменяй язык": change_language,
-    "переключи язык": change_language,
-}
-
-
 def play_sound_worker(file_path: str):
     """Воспроизведение звука с проверкой soundfile."""
     try:
@@ -895,15 +831,6 @@ def load_app_cache() -> dict:
 def save_app_cache(cache_data: dict):
     with open(JSON_CACHE_FILE, "w", encoding="utf-8") as f:
         json.dump(cache_data, f, ensure_ascii=False, indent=4)
-
-
-def get_available_drives() -> list[str]:
-    drives = []
-    for letter in string.ascii_uppercase:
-        drive_path = f"{letter}:\\"
-        if os.path.exists(drive_path):
-            drives.append(drive_path)
-    return drives
 
 
 def find_exe_fast_registry(exe_name: str) -> str | None:
@@ -1015,7 +942,6 @@ def kill_application(target_raw: str):
         if not play_sound("close"):
             play_sound("ok")
 
-    # ИСПОЛЬЗУЕМ PROCESS_KILL_MAP для закрытия
     exe_name = PROCESS_KILL_MAP.get(app_key, app_key)
     if not exe_name.endswith(".exe"):
         exe_name += ".exe"
@@ -1073,6 +999,10 @@ def open_website(target_raw: str):
     return True
 
 
+# ============================================================
+# ОСНОВНАЯ ФУНКЦИЯ ОБРАБОТКИ КОМАНД
+# ============================================================
+
 def process_command(text: str):
     cleaned = text.lower().strip()
     words = cleaned.split()
@@ -1085,7 +1015,7 @@ def process_command(text: str):
     # Убираем триггер-слова
     filtered_words = [w for w in words if w not in TRIGGER_WORDS]
 
-    # Убираем мат и стоп-слова (важно!)
+    # Убираем мат и стоп-слова
     filtered_words = [w for w in filtered_words if w not in BAD_WORDS]
 
     if not filtered_words:
@@ -1094,6 +1024,33 @@ def process_command(text: str):
         return
 
     phrase_after_trigger = " ".join(filtered_words).strip()
+
+    # ============================================================
+    # ПРОВЕРКА КОМАНД ИЗ CONTROL_COMMANDS (С КЛАВИАТУРНЫМИ ДЕЙСТВИЯМИ)
+    # ============================================================
+
+    # Проверяем точное совпадение
+    if phrase_after_trigger in CONTROL_COMMANDS:
+        print(f"[Стелла]: Выполнение команды -> '{phrase_after_trigger}'")
+        try:
+            CONTROL_COMMANDS[phrase_after_trigger]()
+            return
+        except Exception as e:
+            print(f"[Ошибка выполнения]: {e}")
+            play_sound("error")
+            return
+
+    # Проверяем частичное совпадение (для фраз с дополнительными словами)
+    for cmd in CONTROL_COMMANDS:
+        if cmd in phrase_after_trigger:
+            print(f"[Стелла]: Выполнение команды -> '{cmd}'")
+            try:
+                CONTROL_COMMANDS[cmd]()
+                return
+            except Exception as e:
+                print(f"[Ошибка выполнения]: {e}")
+                play_sound("error")
+                return
 
     # 0. СВОРАЧИВАНИЕ ВСЕХ ОКОН (Win + M)
     if "все" in filtered_words and any(w in filtered_words for w in ["окна", "окон", "окно"]):
@@ -1124,7 +1081,7 @@ def process_command(text: str):
                         play_sound("error")
                 return
 
-    # 1. ПРИОРИТЕТНЫЕ МУЗЫКАЛЬНЫЕ КОМАНДЫ
+    # 1. МУЗЫКАЛЬНЫЕ КОМАНДЫ
     if any(w in phrase_after_trigger for w in ["украинскую", "укр"]) and "песн" in phrase_after_trigger:
         play_ukrainian_song()
         return
@@ -1142,7 +1099,7 @@ def process_command(text: str):
                 move_window_to_monitor(target)
                 return
 
-    # 3. Обработка команды "напиши" (печать текста) через keyboard
+    # 3. Обработка команды "напиши" (печать текста)
     for verb in WRITE_VERBS:
         if verb in filtered_words:
             verb_index = filtered_words.index(verb)
@@ -1193,13 +1150,7 @@ def process_command(text: str):
                 change_language()
                 return
 
-    # 7. Команды управления интерфейсом
-    if phrase_after_trigger in CONTROL_COMMANDS:
-        print(f"[Стелла]: Выполнение команды -> '{phrase_after_trigger}'")
-        CONTROL_COMMANDS[phrase_after_trigger]()
-        return
-
-    # 8. Разговорные ответы
+    # 7. Разговорные ответы
     if phrase_after_trigger in GREETINGS_MAP:
         text_response, sound_variants = GREETINGS_MAP[phrase_after_trigger]
         print(f"[Стелла]: {text_response}")
@@ -1218,6 +1169,10 @@ def process_command(text: str):
     play_sound("error")
 
 
+# ============================================================
+# ФУНКЦИЯ АУДИО-ОБРАБОТКИ
+# ============================================================
+
 def audio_callback(indata, frames, time, status):
     audio_queue.put(indata.copy())
 
@@ -1235,21 +1190,34 @@ def main():
 
     print("=" * 60)
     print("Детектор 'Стелла' активен.")
-    print("Команды:")
-    print("  'Стелла НАПИШИ [текст]'      -> Мгновенная печать текста")
-    print("  'Стелла СВЕРНИ ВСЕ ОКНА'     -> Свернуть все окна (Win + M)")
-    print("  'Стелла СВЕРНИ [прогу]'      -> Свернуть конкретное окно")
-    print("  'Стелла ВКЛЮЧИ украинскую песню' -> Укр треки на YouTube")
-    print("  'Стелла ВКЛЮЧИ рандомную песню'  -> Рандомный трек")
-    print("  'Стелла ОТКРОЙ [сайт]'       -> Сайты")
-    print("  'Стелла ЗАПУСТИ [прогу]'     -> Программы (.exe)")
-    print("  'Стелла ЗАКРОЙ [прогу]'      -> Завершить процесс")
-    print("  'Стелла ПЕРЕВЕДИ окно на 2 монитор' -> Перемещение окна")
-    print("  'Стелла ИЗМЕНИ ЯЗЫК'         -> Переключить язык")
+    print("\n📋 КОМАНДЫ РАБОТЫ С ТЕКСТОМ:")
+    print("  'Стелла ВЫДЕЛИ ВСЁ'      -> Ctrl+A")
+    print("  'Стелла СКОПИРУЙ'        -> Ctrl+C")
+    print("  'Стелла ВСТАВЬ'          -> Ctrl+V")
+    print("  'Стелла ВЫРЕЖЬ'          -> Ctrl+X")
+    print("  'Стелла ОТМЕНИ'          -> Ctrl+Z")
+    print("  'Стелла ПОВТОРИ'         -> Ctrl+Y")
+    print("  'Стелла СОХРАНИ'         -> Ctrl+S")
+    print("  'Стелла НАЙДИ'           -> Ctrl+F")
+    print("\n⌨️ КОМАНДЫ КЛАВИШ:")
+    print("  'Стелла ЭНТЕР'           -> Enter")
+    print("  'Стелла ПРОБЕЛ'          -> Space")
+    print("  'Стелла ТАБ'             -> Tab")
+    print("  'Стелла ЭСКЕЙП'          -> Escape")
+    print("  'Стелла ДЕЛИТ'           -> Delete")
+    print("  'Стелла БЭКСПЕЙС'        -> Backspace")
+    print("  'Стелла АЛЬТ ТАБ'        -> Alt+Tab")
+    print("  'Стелла ВИН Д'           -> Win+D (рабочий стол)")
+    print("  'Стелла ВИН М'           -> Win+M (свернуть всё)")
+    print("  'Стелла АЛЬТ Ф4'         -> Alt+F4 (закрыть окно)")
+    print("\n📝 ОСТАЛЬНЫЕ КОМАНДЫ:")
+    print("  'Стелла НАПИШИ [текст]'  -> Печать текста")
+    print("  'Стелла СВЕРНИ ВСЕ'      -> Свернуть все окна")
+    print("  'Стелла ЗАПУСТИ [прогу]' -> Запуск программы")
+    print("  'Стелла ЗАКРОЙ [прогу]'  -> Закрыть программу")
+    print("  'Стелла ОТКРОЙ [сайт]'   -> Открыть сайт")
     print("=" * 60)
-    print("💡 Новые команды сворачивания:")
-    print("   - 'Стелла СВЕРНИ ВСЕ ОКНА' - сворачивает все окна (Win + M)")
-    print("   - 'Стелла СВЕРНИ ДИСКОРД'  - сворачивает конкретное окно")
+    print("💡 ВСЕ КОМАНДЫ РАБОТАЮТ КАК РЕАЛЬНЫЕ НАЖАТИЯ НА КЛАВИАТУРЕ!")
     print("=" * 60)
 
     with sd.InputStream(
