@@ -29,15 +29,6 @@ except ImportError:
 pyautogui.FAILSAFE = False
 pyautogui.PAUSE = 0.05
 
-
-
-
-
-
-
-
-
-
 # Добавьте этот словарь в начало скрипта, после импортов
 STOP_WORDS = [
     "нахуй", "нахуй", "блядь", "блять", "сука", "сук", "хуй", "хую",
@@ -52,12 +43,6 @@ BAD_WORDS = [
     "тупой", "дебил", "идиот", "кретин", "олень", "козел", "козёл",
     "лох", "лошара", "чмо", "шлюха", "курва", "бля", "нах", "хер"
 ]
-
-
-
-
-
-
 
 # ============================================================
 # АВТОМАТИЧЕСКИЙ ПОИСК ПАПКИ MitaAIShka
@@ -850,10 +835,6 @@ def send_ctrl_a():
                 return False
 
 
-
-
-
-
 CONTROL_COMMANDS = {
     "вверх": lambda: pyautogui.scroll(400),
     "скролл вверх": lambda: pyautogui.scroll(400),
@@ -1228,6 +1209,15 @@ def process_command(text: str):
             if target:
                 print(f"[Стелла]: Запуск приложения -> {target}")
                 launch_application(target)
+                return
+
+    # 4.5. Открытие веб-сайтов
+    for verb in WEB_VERBS:
+        if verb in filtered_words:
+            target = " ".join([w for w in filtered_words if w != verb]).strip()
+            if target:
+                print(f"[Стелла]: Открываю сайт -> {target}")
+                open_website(target)
                 return
 
     # 5. Закрытие приложений
