@@ -16,8 +16,1123 @@ import sounddevice as sd
 import pygetwindow as gw
 import psutil
 import keyboard
+import tkinter as tk
+import math
+import sys
+from datetime import datetime, timedelta
 
-# Загрузка soundfile при наличии
+
+# ============================================================
+# ОПРЕДЕЛЕНИЕ БАЗОВОГО ПУТИ ДЛЯ .EXE
+# ============================================================
+
+def get_base_path():
+    """Возвращает правильный путь для .exe и .py"""
+    if getattr(sys, 'frozen', False):
+        # Запущено как .exe
+        return os.path.dirname(sys.executable)
+    else:
+        # Запущено как .py
+        return os.path.dirname(os.path.abspath(__file__))
+
+
+# Установите BASE_DIR в начало файла
+BASE_DIR = get_base_path()
+
+# Пути к файлам (используем BASE_DIR)
+SOUNDS_DIR = os.path.join(BASE_DIR, "sounds")
+JSON_CACHE_FILE = os.path.join(BASE_DIR, "saveAppPty.json")
+
+# ============================================================
+# ИНТЕРФЕЙС В СТИЛЕ MИСИДЕ (MISIDE)
+# ============================================================
+
+# ============================================================
+# СИСТЕМА КЛЮЧЕЙ STELLA AI
+# ============================================================
+# Срок каждого ключа начинается с created_at, даже если ключ ещё
+# не вводили. Активированный ключ сохраняется локально.
+# ============================================================
+KEY_DB_FILE = os.path.join(BASE_DIR, "stella_keys.json")
+ACTIVATED_KEY_FILE = os.path.join(BASE_DIR, "stella_activated_key.json")
+
+# Таблица ключей. created_at задаётся один раз и НЕ сбрасывается.
+# Здесь можно менять/добавлять ключи и сроки.
+KEY_TABLE = {
+    "STELLA-1MIN": {"seconds": 60, "created_at": "2026-08-30 12:00:00"},
+    "STELLA-1H": {"seconds": 3600, "created_at": "2026-08-30 12:00:00"},
+    "STELLA-2H": {"seconds": 7200, "created_at": "2026-08-30 12:00:00"},
+    "STELLA-3H": {"seconds": 10800, "created_at": "2026-08-30 12:00:00"},
+    "STELLA-1DAY": {"seconds": 86400, "created_at": "2026-08-30 12:00:00"},
+    "STELLA-1WEEK": {"seconds": 604800, "created_at": "2026-08-30 12:00:00"},
+    "STELLA-1YEAR": {"seconds": 31536000, "created_at": "2026-08-30 12:00:00"},
+}
+
+
+def _load_json_file(path):
+    try:
+        if os.path.exists(path):
+            with open(path, "r", encoding="utf-8") as f:
+                return json.load(f)
+    except Exception:
+        pass
+    return {}
+
+
+def _save_json_file(path, data):
+    try:
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=4)
+        return True
+    except Exception:
+        return False
+
+
+def _remaining_text(seconds):
+    seconds = max(0, int(seconds))
+    d, rem = divmod(seconds, 86400)
+    h, rem = divmod(rem, 3600)
+    m, s = divmod(rem, 60)
+    if d: return f"{d}д {h}ч"
+    if h: return f"{h}ч {m}м"
+    if m: return f"{m}м {s}с"
+    return f"{s}с"
+
+
+def _build_key_db():
+    db = _load_json_file(KEY_DB_FILE)
+    changed = False
+    for key, cfg in KEY_TABLE.items():
+        if key not in db:
+            created = datetime.strptime(cfg["created_at"], "%Y-%m-%d %H:%M:%S").timestamp()
+            db[key] = {
+                "created_at": created,
+                "expires_at": created + cfg["seconds"],
+                "duration_seconds": cfg["seconds"],
+                "activated": False,
+                "activated_at": None,
+            }
+            changed = True
+    if changed:
+        _save_json_file(KEY_DB_FILE, db)
+    return db
+
+
+def _get_saved_key():
+    saved = _load_json_file(ACTIVATED_KEY_FILE)
+    key = str(saved.get("key", "")).strip().upper()
+    if not key: return None
+    db = _build_key_db()
+    info = db.get(key)
+    if not info: return None
+    if time.time() >= float(info.get("expires_at", 0)):
+        return None
+    return key
+
+
+def _remember_key(key):
+    _save_json_file(ACTIVATED_KEY_FILE, {"key": key, "saved_at": time.time()})
+
+
+def validate_stella_key(key):
+    key = key.strip().upper()
+    db = _build_key_db()
+    if key not in db:
+        return False, "Неверный ключ"
+    info = db[key]
+    remaining = float(info["expires_at"]) - time.time()
+    if remaining <= 0:
+        return False, "Срок действия ключа закончился"
+    info["activated"] = True
+    info["activated_at"] = info.get("activated_at") or time.time()
+    db[key] = info
+    _save_json_file(KEY_DB_FILE, db)
+    _remember_key(key)
+    return True, f"Ключ принят • осталось {_remaining_text(remaining)}"
+
+
+class KeyLoginWindow:
+    def __init__(self):
+        self.result = False
+        self.root = tk.Tk()
+        self.root.title("MITA AI — Введите ключ")
+        self.root.geometry("520x400")  # Увеличил высоту для фото
+        self.root.resizable(False, False)
+        self.root.configure(bg="#09070d")
+
+        self.canvas = tk.Canvas(self.root, bg="#09070d", highlightthickness=0)
+        self.canvas.pack(fill="both", expand=True)
+
+        # Градиентный фон
+        for y in range(400):
+            t = y / 400
+            r = int(9 + 8 * t)
+            g = int(7 + 3 * t)
+            b = int(13 + 14 * t)
+            self.canvas.create_line(0, y, 520, y, fill=f"#{r:02x}{g:02x}{b:02x}")
+
+        # Загрузка и отображение фото Миты
+        self.mita_image = None
+        try:
+            # Путь к фото Миты
+            mita_path = r"C:\Users\dubaz\OneDrive\Desktop\AI MITA\MitaPhoto\Mita.png"
+            if os.path.exists(mita_path):
+                from PIL import Image, ImageTk
+                image = Image.open(mita_path)
+                # Изменяем размер фото
+                image = image.resize((120, 120), Image.Resampling.LANCZOS)
+                self.mita_image = ImageTk.PhotoImage(image)
+                # Размещаем фото в центре верхней части
+                self.canvas.create_image(260, 60, image=self.mita_image)
+            else:
+                print(f"[Предупреждение] Фото Миты не найдено: {mita_path}")
+                # Если фото нет, показываем текст
+                self.canvas.create_text(260, 50, text="✦ MITA AI", font=("Arial", 24, "bold"), fill="#ff8bc4")
+        except Exception as e:
+            print(f"[Ошибка загрузки фото]: {e}")
+            # Если ошибка, показываем текст
+            self.canvas.create_text(260, 50, text="✦ MITA AI", font=("Arial", 24, "bold"), fill="#ff8bc4")
+
+        # Текст "SECURE ACCESS"
+        self.canvas.create_text(260, 145, text="SECURE ACCESS", font=("Arial", 9, "bold"), fill="#a58ca9")
+
+        # Текст "Введите ключ доступа"
+        self.canvas.create_text(260, 175, text="Введите ключ доступа", font=("Arial", 11, "bold"), fill="#fff4fb")
+
+        # Поле ввода
+        self.entry = tk.Entry(self.root, font=("Arial", 13, "bold"), justify="center",
+                              bg="#150d1e", fg="#fff4fb",
+                              insertbackground="#ff8bc4", relief="flat", bd=0)
+        self.entry.place(x=70, y=200, width=380, height=42)
+
+        # Статус
+        self.status = self.canvas.create_text(260, 265, text="", font=("Arial", 9, "bold"), fill="#a58ca9")
+
+        # Кнопка входа
+        self.button = tk.Button(self.root, text="ВОЙТИ В MITA", command=self.try_login,
+                                font=("Arial", 10, "bold"),
+                                bg="#ff5caa", fg="white", activebackground="#ff8bc4",
+                                relief="flat", bd=0, cursor="hand2")
+        self.button.place(x=145, y=290, width=230, height=42)
+
+        # Подпись внизу
+        self.canvas.create_text(260, 365, text="Хочешь миту? пиши -> Discord - va#5572",
+                                font=("Arial", 8), fill="#5d4965")
+
+        self.entry.focus_set()
+        self.root.bind("<Return>", lambda e: self.try_login())
+        self.root.protocol("WM_DELETE_WINDOW", self.cancel)
+
+    def try_login(self):
+        ok, msg = validate_stella_key(self.entry.get())
+        if ok:
+            self.canvas.itemconfig(self.status, text=msg, fill="#ff8bc4")
+            self.result = True
+            self.root.after(450, self.root.destroy)
+        else:
+            self.canvas.itemconfig(self.status, text=msg, fill="#ff557f")
+            self.entry.delete(0, tk.END);
+            self.entry.focus_set()
+
+    def cancel(self):
+        self.result = False;
+        self.root.destroy()
+
+    def show(self):
+        self.root.mainloop()
+        return self.result
+
+
+def require_stella_key():
+    _build_key_db()
+    if _get_saved_key():
+        return True
+    return KeyLoginWindow().show()
+
+
+class SystemAudioMonitor:
+    """Мониторинг системного аудио для визуализации сердцебиения"""
+
+    def __init__(self, interface):
+        self.interface = interface
+        self.running = False
+        self.thread = None
+        self.audio_data = []
+        self.sample_rate = 44100
+        self.chunk_size = 1024
+        self.threshold = 0.02
+        self.last_beat_time = 0
+        self.beat_smoothing = 0.0
+
+    def start(self):
+        """Запуск мониторинга аудио"""
+        if self.running:
+            return
+
+        self.running = True
+        self.thread = threading.Thread(target=self._monitor_loop, daemon=True)
+        self.thread.start()
+
+    def stop(self):
+        """Остановка мониторинга"""
+        self.running = False
+        if self.thread:
+            self.thread.join(timeout=1)
+
+    def _monitor_loop(self):
+        """Основной цикл захвата аудио"""
+        try:
+            with sd.InputStream(
+                    samplerate=self.sample_rate,
+                    channels=1,
+                    dtype='float32',
+                    blocksize=self.chunk_size,
+                    device=None,
+                    callback=self._audio_callback
+            ):
+                while self.running:
+                    if len(self.audio_data) > 0:
+                        data = self.audio_data[-1]
+                        amplitude = np.max(np.abs(data))
+
+                        # Нормализуем амплитуду для сердцебиения
+                        heart_beat = min(1.0, amplitude * 25)
+
+                        # Плавное сглаживание
+                        self.beat_smoothing = self.beat_smoothing * 0.85 + heart_beat * 0.15
+
+                        # Обновляем сердцебиение
+                        self.interface.update_heart_beat(self.beat_smoothing)
+
+                        if len(self.audio_data) > 10:
+                            self.audio_data.pop(0)
+
+                    time.sleep(0.03)
+
+        except Exception as e:
+            print(f"[Audio Monitor Error]: {e}")
+            self._fallback_monitor()
+
+    def _audio_callback(self, indata, frames, time, status):
+        """Колбэк для захвата аудио"""
+        if status:
+            pass
+        self.audio_data.append(indata.copy())
+
+    def _fallback_monitor(self):
+        """Запасной вариант - используем микрофон"""
+        print("[Audio] Использую микрофон для визуализации")
+        try:
+            with sd.InputStream(
+                    samplerate=self.sample_rate,
+                    channels=1,
+                    dtype='float32',
+                    blocksize=self.chunk_size,
+                    callback=self._audio_callback
+            ):
+                while self.running:
+                    if len(self.audio_data) > 0:
+                        data = self.audio_data[-1]
+                        amplitude = np.max(np.abs(data))
+                        heart_beat = min(1.0, amplitude * 30)
+                        self.beat_smoothing = self.beat_smoothing * 0.85 + heart_beat * 0.15
+                        self.interface.update_heart_beat(self.beat_smoothing)
+                        if len(self.audio_data) > 10:
+                            self.audio_data.pop(0)
+                    time.sleep(0.03)
+        except Exception as e:
+            print(f"[Audio Fallback Error]: {e}")
+
+
+class MisideInterface:
+    """Современный неоновый интерфейс Стеллы AI.
+    Сохраняет совместимость с существующим backend:
+    set_listening(), set_processing(), show_command(), run(), quit().
+    """
+
+    W, H = 1100, 720
+
+    def __init__(self):
+        self.root = tk.Tk()
+        self.root.title("MITA AI")
+        self.root.geometry(f"{self.W}x{self.H}")
+        self.root.minsize(900, 620)
+        self.root.configure(bg="#09070d")
+        self.root.overrideredirect(False)
+        self.root.resizable(True, True)
+        self.root.attributes("-topmost", False)
+        self.root.attributes("-alpha", 0.0)
+
+        self.running = True
+        self.is_listening = False
+        self.is_processing = False
+        self.angle = 0.0
+        self.phase = 0.0
+        self.drag_x = 0
+        self.drag_y = 0
+        self.particles = []
+        self.stars = []
+        self.bars = []
+
+        # Параметры сердцебиения
+        self.heart_beat_strength = 0.0
+        self.heart_beat_target = 0.0
+        self.heart_bpm = 72
+        self.last_beat_time = 0
+        self.is_beating = False
+        self.beat_phase = 0.0
+
+        self.colors = {
+            "bg": "#09070d",
+            "panel": "#100b17",
+            "panel2": "#150d1e",
+            "line": "#2b1835",
+            "primary": "#ff5caa",
+            "primary2": "#ff8bc4",
+            "purple": "#a77bff",
+            "text": "#fff4fb",
+            "muted": "#a58ca9",
+            "dim": "#5d4965",
+            "danger": "#ff557f",
+        }
+
+        self.root.bind("<Button-1>", self.start_move)
+        self.root.bind("<B1-Motion>", self.on_move)
+
+        self.setup_ui()
+        self.root.after(20, self.fade_in)
+
+        # Запускаем монитор аудио для сердцебиения
+        self.audio_monitor = SystemAudioMonitor(self)
+        self.audio_monitor.start()
+
+        self.animate()
+
+    def update_heart_beat(self, strength):
+        """Обновляет силу сердцебиения на основе аудио"""
+        self.heart_beat_target = strength
+        if strength > 0.1:
+            self.heart_bpm = 72 + int(strength * 48)  # От 72 до 120 BPM
+
+    def rounded_rect(self, x1, y1, x2, y2, r=18, fill=None, outline=None, width=1, tags=None):
+        """Рисует сглаженную панель на Canvas."""
+        pts = [
+            x1 + r, y1, x2 - r, y1, x2, y1, x2, y1 + r,
+            x2, y2 - r, x2, y2, x2 - r, y2, x1 + r, y2,
+            x1, y2, x1, y2 - r, x1, y1 + r, x1, y1
+        ]
+        return self.canvas.create_polygon(
+            pts, smooth=True, splinesteps=12,
+            fill=fill or "", outline=outline or "", width=width,
+            tags=tags
+        )
+
+    def setup_ui(self):
+        self.canvas = tk.Canvas(
+            self.root, bg=self.colors["bg"], highlightthickness=0,
+            bd=0, relief="flat"
+        )
+        self.canvas.pack(fill=tk.BOTH, expand=True)
+
+        # Фон
+        self.create_background()
+
+        # Верхняя панель
+        self.rounded_rect(18, 15, self.W - 18, 76, 20,
+                          self.colors["panel"], self.colors["line"])
+        self.canvas.create_text(
+            42, 35, text="✦", font=("Arial", 20, "bold"),
+            fill=self.colors["primary2"], anchor="w"
+        )
+        self.canvas.create_text(
+            72, 33, text="MITA", font=("Arial", 19, "bold"),
+            fill=self.colors["text"], anchor="w"
+        )
+        self.canvas.create_text(
+            72, 56, text="AI VOICE ASSISTANT  •  ONLINE",
+            font=("Arial", 8, "bold"), fill=self.colors["muted"], anchor="w"
+        )
+
+
+
+
+        # Окна
+        self.canvas.create_rectangle(
+            1010, 25, 1044, 63, fill=self.colors["panel2"],
+            outline=self.colors["line"], width=1, tags=("minimize_bg",)
+        )
+        self.canvas.create_text(
+            1027, 44, text="—", font=("Arial", 15, "bold"),
+            fill=self.colors["muted"], tags=("minimize",)
+        )
+
+
+
+        # Левая навигация
+        self.rounded_rect(18, 92, 235, 650, 20,
+                          self.colors["panel"], self.colors["line"])
+        self.canvas.create_text(
+            42, 120, text="CONTROL CENTER",
+            font=("Arial", 9, "bold"), fill=self.colors["dim"], anchor="w"
+        )
+
+        self.nav_items = []
+        for i, (label, icon) in enumerate([
+            ("Главная", "⌂"), ("Команды", "⌘"), ("Настройки", "⚙"), ("О системе", "ⓘ")
+        ]):
+            y = 160 + i * 54
+            bg = self.rounded_rect(
+                32, y - 20, 221, y + 22, 12,
+                self.colors["panel2"] if i == 0 else "",
+                self.colors["line"] if i == 0 else ""
+            )
+            txt = self.canvas.create_text(
+                54, y, text=f"{icon}   {label}",
+                font=("Arial", 10, "bold"),
+                fill=self.colors["text"] if i == 0 else self.colors["muted"],
+                anchor="w"
+            )
+            self.nav_items.append((bg, txt))
+
+        self.canvas.create_text(
+            42, 390, text="VOICE ENGINE",
+            font=("Arial", 9, "bold"), fill=self.colors["dim"], anchor="w"
+        )
+
+        self.engine_dot = self.canvas.create_oval(
+            43, 416, 51, 424, fill=self.colors["primary"], outline=""
+        )
+        self.engine_text = self.canvas.create_text(
+            61, 420, text="Mita AI ",
+            font=("Arial", 9, "bold"), fill=self.colors["muted"], anchor="w"
+        )
+
+        # HOTWORD секция с ключом
+        self.canvas.create_text(
+            42, 468, text="HOTWORD",
+            font=("Arial", 9, "bold"), fill=self.colors["dim"], anchor="w"
+        )
+        self.canvas.create_text(
+            42, 490, text="«Стелла»  •  «Мита»",
+            font=("Arial", 10, "bold"), fill=self.colors["text"], anchor="w"
+        )
+
+        # Информация о ключе
+        self.key_info_text = self.canvas.create_text(
+            42, 516, text="", font=("Arial", 9, "bold"), fill=self.colors["text"], anchor="w"
+        )
+
+        # Кнопка смены/ввода ключа
+        change_key_bg = self.canvas.create_rectangle(
+            42, 536, 155, 554, fill=self.colors["panel2"],
+            outline=self.colors["line"], width=1, tags=("change_key_bg",)
+        )
+        self.change_key_btn = self.canvas.create_text(
+            98, 545, text="[ Сменить ключ ]", font=("Arial", 8, "bold"),
+            fill=self.colors["purple"], tags=("change_key",)
+        )
+        self.canvas.tag_bind("change_key", "<Button-1>", lambda e: self.reenter_key())
+        self.canvas.tag_bind("change_key_bg", "<Button-1>", lambda e: self.reenter_key())
+        self.canvas.tag_bind("change_key", "<Enter>",
+                             lambda e: self.canvas.itemconfig(self.change_key_btn, fill=self.colors["primary2"]))
+        self.canvas.tag_bind("change_key", "<Leave>",
+                             lambda e: self.canvas.itemconfig(self.change_key_btn, fill=self.colors["purple"]))
+
+        self.update_key_info()
+
+        # Центральный блок
+        self.rounded_rect(253, 92, 790, 650, 24,
+                          self.colors["panel"], self.colors["line"])
+
+        self.canvas.create_text(
+            522, 120, text="Mita CORE",
+            font=("Arial", 9, "bold"), fill=self.colors["dim"]
+        )
+
+        self.cx, self.cy = 522, 340
+
+        # Аура
+        self.aura = []
+        for radius, outline, width in [
+            (168, "#24142d", 1), (145, "#3b1b43", 1),
+            (122, "#54204e", 2), (101, "#70265c", 1)
+        ]:
+            self.aura.append(
+                self.canvas.create_oval(
+                    self.cx - radius, self.cy - radius,
+                    self.cx + radius, self.cy + radius,
+                    outline=outline, width=width
+                )
+            )
+
+        # Центральное ядро
+        self.core_outer = self.canvas.create_oval(
+            self.cx - 76, self.cy - 76, self.cx + 76, self.cy + 76,
+            fill="#170b1d", outline="#ff5caa", width=2
+        )
+        self.core_inner = self.canvas.create_oval(
+            self.cx - 58, self.cy - 58, self.cx + 58, self.cy + 58,
+            fill="#221024", outline="#a77bff", width=1
+        )
+
+        self.heart_size = 45
+        self.heart = self.create_heart(
+            self.cx, self.cy, self.heart_size, self.colors["primary"]
+        )
+
+        # Добавляем свечение для сердца
+        self.heart_glow = self.canvas.create_oval(
+            self.cx - 70, self.cy - 70, self.cx + 70, self.cy + 70,
+            fill="", outline="#ff5caa", width=3, stipple="gray75"
+        )
+
+        # Орбиты
+        self.orbit_elements = []
+        for i in range(10):
+            a = i * (math.pi * 2 / 10)
+            obj = self.canvas.create_text(
+                self.cx, self.cy, text="✦",
+                font=("Arial", 9 + i % 3, "bold"),
+                fill=self.colors["purple"]
+            )
+            self.orbit_elements.append({
+                "id": obj, "angle": a,
+                "radius": 130 + (i % 2) * 24,
+                "speed": 0.008 + i * 0.0012
+            })
+
+        self.status_text = self.canvas.create_text(
+            self.cx, 525, text="✧ ГОТОВА К РАБОТЕ ✧",
+            font=("Arial", 16, "bold"), fill=self.colors["primary2"]
+        )
+        self.status_sub = self.canvas.create_text(
+            self.cx, 552, text="Ожидаю голосовую команду",
+            font=("Arial", 10), fill=self.colors["muted"]
+        )
+
+        # Визуализатор
+        self.create_bars()
+
+        # Последняя команда
+        self.rounded_rect(290, 590, 754, 628, 12,
+                          self.colors["panel2"], self.colors["line"])
+        self.command_text = self.canvas.create_text(
+            307, 609, text="Последняя команда: —",
+            font=("Arial", 9), fill=self.colors["muted"], anchor="w"
+        )
+
+        # Правая панель
+        self.rounded_rect(808, 92, 1082, 650, 20,
+                          self.colors["panel"], self.colors["line"])
+
+        self.canvas.create_text(
+            833, 120, text="Команды Миты",
+            font=("Arial", 9, "bold"), fill=self.colors["dim"], anchor="w"
+        )
+
+        commands = [
+            ("01", "Запусти", "[программа]"),
+            ("02", "Открой", "[сайт]"),
+            ("03", "Закрой", "[программа]"),
+            ("04", "Напиши", "[текст]"),
+            ("05", "Сверни", "[окно]"),
+            ("06", "Скриншот", ""),
+            ("07", "Скопируй", ""),
+            ("08", "Вставь", ""),
+        ]
+
+        y = 158
+        for num, title, tail in commands:
+            self.canvas.create_text(
+                833, y, text=num, font=("Arial", 8, "bold"),
+                fill=self.colors["primary"], anchor="w"
+            )
+            self.canvas.create_text(
+                862, y, text=title, font=("Arial", 9, "bold"),
+                fill=self.colors["text"], anchor="w"
+            )
+            if tail:
+                self.canvas.create_text(
+                    862, y + 17, text=tail, font=("Arial", 8),
+                    fill=self.colors["muted"], anchor="w"
+                )
+            y += 48
+
+        # Нижняя информация
+        self.canvas.create_line(
+            32, 625, 221, 625, fill=self.colors["line"]
+        )
+        self.canvas.create_text(
+            42, 645, text="RAM", font=("Arial", 8, "bold"),
+            fill=self.colors["dim"], anchor="w"
+        )
+        self.ram_text = self.canvas.create_text(
+            205, 645, text=f"{self.get_ram_usage()} MB",
+            font=("Arial", 8, "bold"), fill=self.colors["muted"], anchor="e"
+        )
+
+        # Добавляем индикатор аудио
+        self.canvas.create_text(
+            820, 645, text="AUDIO", font=("Arial", 8, "bold"),
+            fill=self.colors["dim"], anchor="w"
+        )
+        self.audio_indicator = self.canvas.create_text(
+            930, 645, text="⚪", font=("Arial", 12, "bold"),
+            fill=self.colors["dim"], anchor="e"
+        )
+
+        self.canvas.create_text(
+            820, 700, text="Mita AI  •  2026",
+            font=("Arial", 8), fill=self.colors["dim"], anchor="w"
+        )
+        self.create_particles()
+        self.create_stars()
+
+    def update_key_info(self):
+        """Обновляет информацию о ключе и оставшемся времени"""
+        saved_key = _get_saved_key()
+        if saved_key:
+            db = _load_json_file(KEY_DB_FILE)
+            info = db.get(saved_key)
+            if info:
+                remaining = float(info["expires_at"]) - time.time()
+                if remaining > 0:
+                    key_display = saved_key[:8] + "..." if len(saved_key) > 8 else saved_key
+                    time_left = _remaining_text(remaining)
+                    self.canvas.itemconfig(
+                        self.key_info_text,
+                        text=f"🔑 {key_display}  •  {time_left}",
+                        fill=self.colors["text"]
+                    )
+                    self.root.after(10000, self.update_key_info)
+                    return
+
+        self.canvas.itemconfig(
+            self.key_info_text,
+            text="🔑 Нет ключа",
+            fill=self.colors["danger"]
+        )
+        self.root.after(10000, self.update_key_info)
+
+    def reenter_key(self):
+        """Позволяет ввести новый ключ"""
+        self.root.attributes("-topmost", False)
+        if KeyLoginWindow().show():
+            self.update_key_info()
+        self.root.attributes("-topmost", False)
+
+    def create_background(self):
+        # Мягкий вертикальный градиент
+        for y in range(self.H):
+            t = y / max(1, self.H - 1)
+            r = int(9 + 8 * t)
+            g = int(7 + 3 * t)
+            b = int(13 + 14 * t)
+            self.canvas.create_line(
+                0, y, self.W, y,
+                fill=f"#{r:02x}{g:02x}{b:02x}"
+            )
+
+        # Декоративные диагонали
+        for x in range(-self.H, self.W, 90):
+            self.canvas.create_line(
+                x, 0, x + self.H, self.H,
+                fill="#120b18", width=1
+            )
+
+    def create_heart(self, x, y, size, color):
+        points = []
+        for t in range(0, 360, 5):
+            rad = math.radians(t)
+            hx = 16 * math.sin(rad) ** 3
+            hy = (
+                    13 * math.cos(rad)
+                    - 5 * math.cos(2 * rad)
+                    - 2 * math.cos(3 * rad)
+                    - math.cos(4 * rad)
+            )
+            points.extend([
+                x + hx * size / 16,
+                y - hy * size / 16
+            ])
+
+        heart_id = self.canvas.create_polygon(
+            points, fill=color, outline=color, width=2
+        )
+        glow_id = self.canvas.create_polygon(
+            points, fill="", outline="#ff8bc4", width=3
+        )
+        return {"id": heart_id, "glow": glow_id}
+
+    def create_particles(self):
+        symbols = ["✦", "·", "✧", "◇"]
+        for _ in range(36):
+            self.particles.append({
+                "angle": random.uniform(0, math.pi * 2),
+                "radius": random.uniform(90, 215),
+                "speed": random.uniform(.15, .8),
+                "size": random.randint(7, 12),
+                "symbol": random.choice(symbols),
+                "id": None
+            })
+
+    def create_stars(self):
+        for _ in range(42):
+            x = random.randint(15, self.W - 15)
+            y = random.randint(85, self.H - 15)
+            size = random.choice([2, 2, 3])
+            obj = self.canvas.create_oval(
+                x, y, x + size, y + size,
+                fill="#4a2d55", outline=""
+            )
+            self.stars.append({
+                "id": obj, "x": x, "y": y,
+                "speed": random.uniform(.4, 1.5)
+            })
+
+    def create_bars(self):
+        self.bars = []
+        start_x = 402
+        for i in range(25):
+            x = start_x + i * 10
+            obj = self.canvas.create_rectangle(
+                x, self.cy + 92, x + 5, self.cy + 94,
+                fill=self.colors["purple"], outline=""
+            )
+            self.bars.append({
+                "id": obj, "x": x,
+                "base": self.cy + 93,
+                "height": 2.0,
+                "phase": random.uniform(0, math.pi * 2)
+            })
+
+    def get_ram_usage(self):
+        try:
+            return int(psutil.Process().memory_info().rss / 1024 / 1024)
+        except Exception:
+            return 0
+
+    def update_heart(self, size, color, glow_intensity=1.0):
+        """Обновляет сердце с пульсацией"""
+        points = []
+        # Добавляем небольшое искажение для эффекта биения
+        beat_offset = 0
+        if self.heart_beat_strength > 0.05:
+            beat_offset = math.sin(self.beat_phase) * self.heart_beat_strength * 8
+
+        for t in range(0, 360, 5):
+            rad = math.radians(t)
+            hx = 16 * math.sin(rad) ** 3
+            hy = (
+                    13 * math.cos(rad)
+                    - 5 * math.cos(2 * rad)
+                    - 2 * math.cos(3 * rad)
+                    - math.cos(4 * rad)
+            )
+            # Добавляем эффект пульсации
+            scale = 1 + beat_offset / 100
+            points.extend([
+                self.cx + hx * size / 16 * scale,
+                self.cy - hy * size / 16 * scale
+            ])
+
+        self.canvas.coords(self.heart["id"], *points)
+        self.canvas.coords(self.heart["glow"], *points)
+        self.canvas.itemconfig(self.heart["id"], fill=color, outline=color)
+
+        # Обновляем свечение
+        glow_alpha = int(50 + 150 * glow_intensity)
+        self.canvas.itemconfig(self.heart_glow, outline=color)
+        self.canvas.coords(
+            self.heart_glow,
+            self.cx - 60 - beat_offset, self.cy - 60 - beat_offset,
+            self.cx + 60 + beat_offset, self.cy + 60 + beat_offset
+        )
+
+    def animate_heart_beat(self):
+        """Анимация сердцебиения на основе аудио"""
+        # Плавное изменение силы биения
+        self.heart_beat_strength += (self.heart_beat_target - self.heart_beat_strength) * 0.15
+
+        # Обновляем фазу биения
+        bpm_factor = self.heart_bpm / 60.0
+        self.beat_phase += 0.025 * bpm_factor * 2
+
+        # Определяем интенсивность свечения
+        if self.heart_beat_strength > 0.1:
+            glow = 0.5 + self.heart_beat_strength * 0.5
+            # Добавляем пульсацию цвета
+            color_pulse = min(1.0, self.heart_beat_strength * 1.5)
+            r = int(255 - (255 - 167) * (1 - color_pulse))
+            g = int(92 - 92 * (1 - color_pulse))
+            b = int(170 - 170 * (1 - color_pulse))
+            color = f"#{r:02x}{g:02x}{b:02x}"
+        else:
+            glow = 0.3
+            color = self.colors["primary"]
+
+        # Обновляем BPM на индикаторе
+
+
+
+        # Обновляем индикатор аудио
+        if self.heart_beat_strength > 0.15:
+            self.canvas.itemconfig(self.audio_indicator, text="🔴", fill="#ff5caa")
+        elif self.heart_beat_strength > 0.05:
+            self.canvas.itemconfig(self.audio_indicator, text="🟡", fill="#a77bff")
+        else:
+            self.canvas.itemconfig(self.audio_indicator, text="⚪", fill=self.colors["dim"])
+
+        return glow, color
+
+    def animate(self):
+        if not self.running:
+            return
+
+        self.angle += 0.035
+        self.phase += 0.12
+
+        # Анимируем сердцебиение
+        glow_intensity, heart_color = self.animate_heart_beat()
+
+        if self.is_listening:
+            status = "♪ СЛУШАЮ ВАС... ♪"
+            sub = "Говорите — Стелла распознаёт голос"
+            color = self.colors["primary"]
+        elif self.is_processing:
+            status = "✦ ОБРАБОТКА... ✦"
+            sub = "Выполняю вашу команду"
+            color = self.colors["purple"]
+        else:
+            status = "✧ ГОТОВА К РАБОТЕ ✧"
+            sub = "Ожидаю голосовую команду"
+            color = self.colors["primary2"]
+
+        # Пульс сердца зависит от аудио
+        pulse_size = 45 + math.sin(self.angle * 2.0) * 4
+        if self.heart_beat_strength > 0.1:
+            # Добавляем дополнительную пульсацию от аудио
+            audio_pulse = 1 + math.sin(self.beat_phase) * self.heart_beat_strength * 0.3
+            pulse_size = 45 * audio_pulse
+
+        self.update_heart(pulse_size, heart_color, glow_intensity)
+
+        self.canvas.itemconfig(self.status_text, text=status, fill=color)
+        self.canvas.itemconfig(self.status_sub, text=sub)
+        self.canvas.itemconfig(self.core_outer, outline=color)
+
+        # Пульс ауры
+        for i, obj in enumerate(self.aura):
+            delta = math.sin(self.angle * 1.4 + i) * (2 + i)
+            # Добавляем влияние аудио на ауру
+            audio_delta = self.heart_beat_strength * 10 * math.sin(self.beat_phase + i)
+            base = [168, 145, 122, 101][i]
+            total_delta = delta + audio_delta
+            self.canvas.coords(
+                obj,
+                self.cx - base - total_delta, self.cy - base - total_delta,
+                self.cx + base + total_delta, self.cy + base + total_delta
+            )
+            # Меняем цвет ауры в зависимости от аудио
+            if self.heart_beat_strength > 0.1:
+                alpha = int(100 + 155 * self.heart_beat_strength)
+                self.canvas.itemconfig(obj, outline=f"#{alpha:02x}2d{alpha:02x}")
+
+        # Орбиты
+        for item in self.orbit_elements:
+            item["angle"] += item["speed"]
+            # Добавляем влияние аудио на орбиты
+            orbit_offset = self.heart_beat_strength * 15 * math.sin(self.beat_phase + item["angle"])
+            radius = item["radius"] + orbit_offset
+            x = self.cx + math.cos(item["angle"]) * radius
+            y = self.cy + math.sin(item["angle"]) * radius
+            self.canvas.coords(item["id"], x, y)
+            self.canvas.itemconfig(item["id"], fill=color)
+
+        # Частицы
+        for p in self.particles:
+            p["angle"] += p["speed"] * 0.01
+            # Добавляем влияние аудио на частицы
+            particle_pulse = 1 + self.heart_beat_strength * 0.2 * math.sin(self.beat_phase + p["angle"])
+            radius = p["radius"] * particle_pulse
+            x = self.cx + math.cos(p["angle"]) * radius
+            y = self.cy + math.sin(p["angle"]) * radius
+            if p["id"] is None:
+                p["id"] = self.canvas.create_text(
+                    x, y, text=p["symbol"],
+                    font=("Arial", p["size"]),
+                    fill=color
+                )
+            else:
+                self.canvas.coords(p["id"], x, y)
+                self.canvas.itemconfig(p["id"], fill=color)
+
+        # Мерцание
+        now = time.time()
+        for i, star in enumerate(self.stars):
+            v = 0.35 + 0.35 * (math.sin(now * star["speed"] + i) + 1) / 2
+            c = int(55 + 75 * v)
+            self.canvas.itemconfig(
+                star["id"], fill=f"#{c:02x}{int(c * 0.55):02x}{int(c * 0.75):02x}"
+            )
+
+        # Аудио-визуализатор - теперь реагирует на аудио
+        for i, bar in enumerate(self.bars):
+            if self.is_listening or self.is_processing:
+                target = 5 + abs(math.sin(self.phase + i * .55)) * random.randint(8, 24)
+                bar["height"] += (target - bar["height"]) * .28
+            else:
+                # Добавляем реакцию на аудио в фоновом режиме
+                audio_boost = self.heart_beat_strength * 20
+                target = 2.5 + abs(math.sin(self.phase * .4 + i)) * 2 + audio_boost * abs(
+                    math.sin(self.beat_phase + i * 0.5))
+                bar["height"] += (target - bar["height"]) * .12
+
+            h = max(2, bar["height"])
+            self.canvas.coords(
+                bar["id"],
+                bar["x"], bar["base"] - h,
+                          bar["x"] + 5, bar["base"]
+            )
+            # Меняем цвет баров в зависимости от аудио
+            if self.heart_beat_strength > 0.1:
+                bar_color = self.colors["primary"] if h > 10 else color
+            else:
+                bar_color = color
+            self.canvas.itemconfig(bar["id"], fill=bar_color)
+
+        self.canvas.itemconfig(
+            self.ram_text, text=f"{self.get_ram_usage()} MB"
+        )
+
+        self.root.after(20, self.animate)
+
+    def fade_in(self, alpha=0.0):
+        if not self.running:
+            return
+        alpha += 0.06
+        if alpha >= 0.98:
+            self.root.attributes("-alpha", 0.98)
+            return
+        self.root.attributes("-alpha", alpha)
+        self.root.after(20, lambda: self.fade_in(alpha))
+
+    def start_move(self, event):
+        self.drag_x = event.x
+        self.drag_y = event.y
+
+    def on_move(self, event):
+        dx = event.x - self.drag_x
+        dy = event.y - self.drag_y
+        x = self.root.winfo_x() + dx
+        y = self.root.winfo_y() + dy
+        self.root.geometry(f"+{x}+{y}")
+
+    def minimize(self):
+        self.root.withdraw()
+
+    def set_listening(self, state):
+        self.is_listening = state
+        if state:
+            self.is_processing = False
+
+    def set_processing(self, state):
+        self.is_processing = state
+        if state:
+            self.is_listening = False
+
+    def show_command(self, text):
+        short = text.replace("\n", " ").strip()
+        if len(short) > 48:
+            short = short[:48] + "..."
+        self.canvas.itemconfig(
+            self.command_text,
+            text=f"Последняя команда: {short or '—'}"
+        )
+
+    def quit(self):
+        self.running = False
+        # Останавливаем аудио монитор
+        if hasattr(self, 'audio_monitor'):
+            self.audio_monitor.stop()
+        try:
+            self.root.quit()
+            self.root.destroy()
+        except Exception:
+            pass
+        os._exit(0)
+
+    def run(self):
+        self.root.mainloop()
+
+
+# ============================================================
+# ФУНКЦИЯ ГОЛОСОВОГО АССИСТЕНТА
+# ============================================================
+
+def voice_assistant_thread(interface, recognizer, audio_queue, sample_rate, ENERGY_THRESHOLD, SILENCE_LIMIT):
+    """Запускает голосовой ассистент в отдельном потоке"""
+    word_buffer = []
+    silence_counter = 0
+    is_speaking = False
+
+    print("=" * 60)
+    print("✦ MISIDE - Стелла AI ✦")
+    print("=" * 60)
+    print("🎤 Скажите 'Стелла' + команда")
+    print("=" * 60)
+
+    with sd.InputStream(
+            samplerate=sample_rate,
+            channels=1,
+            dtype="float32",
+            blocksize=800,
+            callback=lambda indata, frames, time, status: audio_queue.put(indata.copy()),
+    ):
+        while interface.running:
+            try:
+                data = audio_queue.get(timeout=0.02)
+            except queue.Empty:
+                continue
+
+            samples = data[:, 0]
+            amplitude = np.max(np.abs(samples))
+
+            if amplitude > ENERGY_THRESHOLD:
+                is_speaking = True
+                silence_counter = 0
+                word_buffer.append(samples)
+                if not interface.is_listening:
+                    interface.set_listening(True)
+            elif is_speaking:
+                word_buffer.append(samples)
+                silence_counter += 1
+
+                if silence_counter >= SILENCE_LIMIT:
+                    interface.set_listening(False)
+
+                    if word_buffer:
+                        try:
+                            full_phrase_audio = np.concatenate(word_buffer)
+                            stream = recognizer.create_stream()
+                            stream.accept_waveform(sample_rate, full_phrase_audio)
+                            recognizer.decode_stream(stream)
+                            recognized_text = stream.result.text.strip()
+
+                            if recognized_text:
+                                process_command(recognized_text, interface)
+                        except Exception as e:
+                            print(f"[Ошибка распознавания]: {e}")
+
+                    word_buffer = []
+                    silence_counter = 0
+                    is_speaking = False
+
+
+# ============================================================
+# ГЛОБАЛЬНЫЕ ПЕРЕМЕННЫЕ И ФУНКЦИИ
+# ============================================================
+
 try:
     import soundfile as sf
 
@@ -25,18 +1140,9 @@ try:
 except ImportError:
     HAS_SOUNDFILE = False
 
-# Настройки PyAutoGUI
 pyautogui.FAILSAFE = False
 pyautogui.PAUSE = 0.05
 
-# Добавьте этот словарь в начало скрипта, после импортов
-STOP_WORDS = [
-    "нахуй", "нахуй", "блядь", "блять", "сука", "сук", "хуй", "хую",
-    "пизда", "пиздец", "ебан", "ебать", "заеб", "пидор", "гандон",
-    "мудак", "уебок", "тупой", "дебил", "идиот", "кретин", "олень"
-]
-
-# Или более полный список
 BAD_WORDS = [
     "нахуй", "блядь", "блять", "сука", "хуй", "пизда", "пиздец",
     "ебан", "ебать", "заеб", "пидор", "гандон", "мудак", "уебок",
@@ -44,12 +1150,8 @@ BAD_WORDS = [
     "лох", "лошара", "чмо", "шлюха", "курва", "бля", "нах", "хер"
 ]
 
-# ============================================================
-# АВТОМАТИЧЕСКИЙ ПОИСК ПАПКИ MitaAIShka
-# ============================================================
 
 def get_available_drives() -> list[str]:
-    """Возвращает список доступных дисков"""
     drives = []
     for letter in string.ascii_uppercase:
         drive_path = f"{letter}:\\"
@@ -59,9 +1161,7 @@ def get_available_drives() -> list[str]:
 
 
 def find_mita_folder():
-    """Автоматически ищет папку MitaAIShka на дисках"""
     possible_paths = [
-        # Стандартные пути установки
         r"C:\AI MITA\MitaAIShka",
         r"D:\AI MITA\MitaAIShka",
         r"E:\AI MITA\MitaAIShka",
@@ -69,30 +1169,27 @@ def find_mita_folder():
         r"C:\Program Files (x86)\AI MITA\MitaAIShka",
         r"C:\Users\{}\Documents\AI MITA\MitaAIShka".format(os.getlogin()),
         r"C:\Users\{}\Desktop\AI MITA\MitaAIShka".format(os.getlogin()),
-        # Текущая директория
         os.path.join(os.getcwd(), "MitaAIShka"),
         os.path.join(os.getcwd(), "AI MITA", "MitaAIShka"),
+        os.path.join(BASE_DIR, "MitaAIShka"),
+        os.path.join(BASE_DIR, "AI MITA", "MitaAIShka"),
     ]
 
-    # Поиск на всех доступных дисках
     for drive in get_available_drives():
         possible_paths.append(os.path.join(drive, "AI MITA", "MitaAIShka"))
         possible_paths.append(os.path.join(drive, "MitaAIShka"))
         possible_paths.append(os.path.join(drive, "Users", os.getlogin(), "Documents", "AI MITA", "MitaAIShka"))
         possible_paths.append(os.path.join(drive, "Users", os.getlogin(), "Desktop", "AI MITA", "MitaAIShka"))
 
-    # Проверяем все пути (быстрый поиск)
     print("🔍 Ищу папку MitaAIShka...")
     for path in possible_paths:
         if os.path.exists(path):
-            # Проверяем наличие model.int8.onnx и tokens.txt
             model_file = os.path.join(path, "model.int8.onnx")
             tokens_file = os.path.join(path, "tokens.txt")
             if os.path.exists(model_file) and os.path.exists(tokens_file):
                 print(f"✓ Найдена папка MitaAIShka: {path}")
                 return path
 
-    # Если не нашли, ищем рекурсивно (только в Program Files и Users)
     print("🔍 Расширенный поиск MitaAIShka...")
     search_roots = []
     for drive in get_available_drives():
@@ -111,7 +1208,6 @@ def find_mita_folder():
                 if os.path.exists(model_file) and os.path.exists(tokens_file):
                     print(f"✓ Найдена папка MitaAIShka: {test_path}")
                     return test_path
-            # Ограничиваем глубину для скорости
             if dirpath.count(os.sep) - root.count(os.sep) > 4:
                 continue
 
@@ -119,24 +1215,25 @@ def find_mita_folder():
     return os.getcwd()
 
 
-# Поиск папки с моделью
 MODEL_DIR = find_mita_folder()
-JSON_CACHE_FILE = os.path.join(os.getcwd(), "saveAppPty.json")
-SOUNDS_DIR = os.path.join(os.getcwd(), "sounds")
 
 model_path = os.path.join(MODEL_DIR, "model.int8.onnx")
 tokens_path = os.path.join(MODEL_DIR, "tokens.txt")
 
-# Проверка наличия файлов модели
 if not os.path.exists(model_path) or not os.path.exists(tokens_path):
     print("❌ ОШИБКА: Файлы модели не найдены!")
     print(f"   Искал в: {MODEL_DIR}")
-    print("   Убедитесь, что папка MitaAIShka содержит model.int8.onnx и tokens.txt")
-    print("   Или укажите путь вручную в коде (строка MODEL_DIR = ...)")
-    exit(1)
+    model_path = os.path.join(BASE_DIR, "model.int8.onnx")
+    tokens_path = os.path.join(BASE_DIR, "tokens.txt")
+    if os.path.exists(model_path) and os.path.exists(tokens_path):
+        MODEL_DIR = BASE_DIR
+        print(f"✅ Модель найдена в: {MODEL_DIR}")
+    else:
+        print(f"❌ Модель не найдена! Проверьте папку с программой.")
+        input("Нажмите Enter для выхода...")
+        sys.exit(1)
 
 print(f"✅ Модель загружена из: {MODEL_DIR}")
-print("=" * 60)
 
 recognizer = sherpa_onnx.OfflineRecognizer.from_nemo_ctc(
     model=model_path,
@@ -153,7 +1250,6 @@ SILENCE_LIMIT = 4
 
 TRIGGER_WORDS = ["мита", "стелла", "стелам", "стеллу"]
 
-# Глаголы действий
 APP_VERBS = ["запусти", "запустил", "включи", "запустить", "включить"]
 WEB_VERBS = ["открой", "открыть", "перейди", "перейти", "покажи"]
 CLOSE_VERBS = ["закрой", "закрыть", "выключи", "выключить", "убей"]
@@ -162,17 +1258,15 @@ MOVE_VERBS = ["переведи", "перемести", "перекинь", "о�
 WRITE_VERBS = ["напиши", "напечатай", "пиши", "печатай", "набор"]
 MINIMIZE_VERBS = ["сверни", "свернуть", "скрой", "спрячь"]
 
-# Разговорные фразы
 GREETINGS_MAP = {
-    "ты тут": ("Да, я здесь! Чем помочь?", ["you_here", "ty_tut", "tut"]),
-    "ты здесь": ("Здесь. Слушаю вас.", ["you_here", "ty_tut", "tut"]),
-    "привет": ("Привет! Что нужно запустить или открыть?", ["hello", "privet"]),
-    "как дела": ("Все отличнo, готова к работе!", ["how_are_you", "kak_dela"]),
-    "не спишь": ("", ["how_are_you", "ne_spish"]),
-    "спишь": ("", ["how_are_you", "ne_spish"]),
+    "ты тут": ("Да, я здесь! Чем помочь?", ["you_here"]),
+    "ты здесь": ("Здесь. Слушаю вас.", ["you_here"]),
+    "привет": ("Привет! Что нужно запустить или открыть?", ["hello"]),
+    "как дела": ("Все отлично, готова к работе!", ["how_are_you"]),
+    "не спишь": ("Я всегда на связи!", ["how_are_you"]),
+    "спишь": ("Я всегда на связи!", ["how_are_you"]),
 }
 
-# 1. Маппинг голосовых команд в системные ключи
 APP_TRANSLIT_MAP = {
     "дискорд": "discord",
     "роблокс": "roblox",
@@ -184,7 +1278,7 @@ APP_TRANSLIT_MAP = {
     "телега": "telegram",
     "браузер": "chrome",
     "хром": "chrome",
-    "янндекс": "yandex",
+    "яндекс": "yandex",
     "спотифай": "spotify",
     "дота": "dota2",
     "кс": "cs2",
@@ -192,7 +1286,6 @@ APP_TRANSLIT_MAP = {
     "блокнот": "notepad",
 }
 
-# 2. Маппинг ключей в реальные имена файлов (ДЛЯ ЗАПУСКА)
 APP_EXE_MAP = {
     "roblox": "RobloxPlayerBeta.exe",
     "discord": "Discord.exe",
@@ -202,29 +1295,17 @@ APP_EXE_MAP = {
     "yandex": "browser.exe",
     "spotify": "Spotify.exe",
     "dota2": "dota2.exe",
-    "геншн": "launcher.exe",
     "геншин": "launcher.exe",
-    "генше": "launcher.exe",
-    "геншин инпакт": "launcher.exe",
     "genshin impact": "launcher.exe",
-    "геншен": "launcher.exe",
-    "obs": "obs.bat",
-    "обс": "obs.bat",
-    "об": "obs.bat",
-    "бс": "obs.bat",
+    "obs": "obs64.exe",
     "cs2": "cs2.exe",
     "xeno": "Xeno-v1.3.60.exe",
-    "ксена": "Xeno-v1.3.60.exe",
-    "ксено": "Xeno-v1.3.60.exe",
     "calc": "calc.exe",
     "notepad": "notepad.exe",
 }
 
-# 3. Маппинг для ЗАКРЫТИЯ (реальные имена .exe процессов)
 PROCESS_KILL_MAP = {
     "obs": "obs64.exe",
-    "обс": "obs64.exe",
-    "об": "obs64.exe",
     "discord": "Discord.exe",
     "telegram": "Telegram.exe",
     "steam": "steam.exe",
@@ -232,14 +1313,7 @@ PROCESS_KILL_MAP = {
     "yandex": "browser.exe",
     "spotify": "Spotify.exe",
     "xeno": "Xeno-v1.3.60.exe",
-    "ксена": "Xeno-v1.3.60.exe",
-    "ксено": "Xeno-v1.3.60.exe",
-    "геншн": "HoYoPlay.exe",
     "геншин": "HoYoPlay.exe",
-    "генше": "HoYoPlay.exe",
-    "геншин инпакт": "HoYoPlay.exe",
-    "genshin impact": "HoYoPlay.exe",
-    "геншен": "HoYoPlay.exe",
     "dota2": "dota2.exe",
     "roblox": "RobloxPlayerBeta.exe",
     "cs2": "cs2.exe",
@@ -249,8 +1323,6 @@ PROCESS_KILL_MAP = {
 
 WEB_URLS_MAP = {
     "покет": ["https://m.pocketoption.com/ru/cabinet/demo-quick-high-low/", "https://blacksignalsus.com/"],
-    "покет опшен": ["https://m.pocketoption.com/ru/cabinet/demo-quick-high-low/", "https://blacksignalsus.com/"],
-    "pocket": ["https://m.pocketoption.com/ru/cabinet/demo-quick-high-low/", "https://blacksignalsus.com/"],
     "тик ток": "https://www.tiktok.com",
     "тикток": "https://www.tiktok.com",
     "ютуб": "https://www.youtube.com",
@@ -260,367 +1332,37 @@ WEB_URLS_MAP = {
     "вк": "https://vk.com",
     "вконтакте": "https://vk.com",
     "телеграм": "https://web.telegram.org",
-    "телеграмм": "https://web.telegram.org",
     "гитхаб": "https://github.com",
     "почту": "https://mail.google.com",
     "почта": "https://mail.google.com",
 }
 
-# Списки URL для случайно выбираемой музыки
 UKRAINIAN_SONGS_URLS = [
     "https://www.youtube.com/results?search_query=KAZKA+-+%D0%9F%D0%BB%D0%B0%D0%BA%D0%B0%D0%BB%D0%B0",
     "https://www.youtube.com/results?search_query=KALUSH+%26+SKOFKA+-+%D0%94%D0%BE%D0%B4%D0%BE%D0%BC%D1%83",
-    "https://www.youtube.com/results?search_query=%D0%92%D1%80%D0%B5%D0%BC%D1%8F+%D0%B8+%D0%A1%D1%82%D0%B5%D0%BA%D0%BB%D0%BE+-+%D0%94%D0%B8%D0%BC",
     "https://www.youtube.com/results?search_query=Kalush+Orchestra+-+Stefania",
-    "https://www.youtube.com/results?search_query=Artem+Pivovarov+-+%D0%94%D0%B5%D0%B6%D0%B0%D0%B2%D1%8E",
-    "https://www.youtube.com/results?search_query=%D0%9E%D0%BA%D0%B5%D0%B0%D0%BD+%D0%95%D0%BB%D1%8C%D0%B7%D0%B8+-+%D0%9E%D0%B1%D1%96%D0%B9%D0%BC%D0%B8",
-    "https://www.youtube.com/results?search_query=SKOFKA+-+%D0%A7%D1%83%D1%82%D0%B8+%D0%B3%D1%96%D0%BC%D0%BD",
-    "https://www.youtube.com/results?search_query=%D0%A5%D1%80%D0%B8%D1%81%D1%82%D0%B8%D0%BD%D0%B0+%D0%A1%D0%BE%D0%BB%D0%BE%D0%B2%D1%96%D0%B9+-+%D0%A2%D1%80%D0%B8%D0%BC%D0%B0%D0%B9",
-    "https://www.youtube.com/results?search_query=Artem+Pivovarov+%26+DOROFEEVA+-+%D0%94%D1%83%D0%BC%D0%B8",
-    "https://www.youtube.com/results?search_query=YAKTAK+%26+SOBOL+-+%D0%9F%D0%BE%D0%B3%D0%BB%D1%8F%D0%B4",
-    "https://www.youtube.com/results?search_query=%D0%9C%D0%B0%D0%BA%D1%81%D0%B8%D0%BC+%D0%91%D0%BE%D1%80%D0%BE%D0%B4%D1%96%D0%BD+-+%D0%AF%D0%BA%D0%B1%D0%B8+%D0%BD%D0%B5+%D1%82%D0%B8",
-    "https://www.youtube.com/results?search_query=DZIDZIO+-+%D0%92%D0%B8%D1%85%D1%96%D0%B4%D0%BD%D0%B8%D0%B9",
-    "https://www.youtube.com/results?search_query=YAKTAK+%26+KOLA+-+%D0%9F%D0%BE%D1%80%D1%96%D1%87%D0%BA%D0%B0",
-    "https://www.youtube.com/results?search_query=ZOZULYA+-+%D0%A7%D0%BE%D1%80%D0%BD%D0%B5+%D1%96+%D0%B1%D1%96%D0%BB%D0%B5",
-    "https://www.youtube.com/results?search_query=Artem+Pivovarov+%26+NK+-+%D0%A2%D0%B0%D0%BC+%D1%83+%D1%82%D0%BE%D0%BF%D0%BE%D0%BB%D1%96",
-    "https://www.youtube.com/results?search_query=O%D0%BB%D0%B5%D0%B3+%D0%92%D0%B8%D0%BD%D0%BD%D0%B8%D0%BA+-+%D0%92%D0%BE%D0%B2%D1%87%D0%B8%D1%86%D1%8F",
-    "https://www.youtube.com/results?search_query=Artem+Pivovarov+%26+Klavdia+Petrivna+-+%D0%91%D0%B0%D1%80%D0%B0%D0%B1%D0%B0%D0%BD",
-    "https://www.youtube.com/results?search_query=Wellboy+-+%D0%93%D1%83%D1%81%D0%B8",
-    "https://www.youtube.com/results?search_query=%D0%9F%D0%BE%D1%82%D0%B0%D0%BF+%26+%D0%9E%D0%BB%D0%B5%D0%B3+%D0%92%D0%B8%D0%BD%D0%BD%D0%B8%D0%BA+-+%D0%9D%D0%B0%D0%B9%D0%BA%D1%80%D0%B0%D1%89%D0%B8%D0%B9+%D0%B4%D0%B5%D0%BD%D1%8C",
-    "https://www.youtube.com/results?search_query=Klavdia+Petrivna+%26+%D0%9C%D0%B0%D1%88%D0%B0+%D0%9A%D0%BE%D0%BD%D0%B4%D1%80%D0%B0%D1%82%D0%B5%D0%BD%D0%BA%D0%BE+-+%D0%87%D0%B4%D0%B5+%D0%B4%D0%B0%D1%85",
-    "https://www.youtube.com/results?search_query=%D0%9E%D0%BA%D0%B5%D0%B0%D0%BD+%D0%95%D0%BB%D1%8C%D0%B7%D0%B8+%26+YAKTAK+%26+KOLA+%26+SHUMEI+%26+Jerry+Heil+-+%D0%A2%D0%BE%D0%B9+%D0%B4%D0%B5%D0%BD%D1%8C",
-    "https://www.youtube.com/results?search_query=YAKTAK+-+%D0%A3%D0%BD%D0%BE%D1%87%D1%96",
-    "https://www.youtube.com/results?search_query=YAKTAK+-+LaLaLa",
-    "https://www.youtube.com/results?search_query=YAKTAK+-+%D0%9D%D0%B5%D0%B1%D0%BE",
-    "https://www.youtube.com/results?search_query=YAKTAK+-+%D0%9C%D0%BE%D1%80%D0%B5",
-    "https://www.youtube.com/results?search_query=KOLA+-+%D0%91%D1%96%D0%BB%D1%8F+%D1%81%D0%B5%D1%80%D1%86%D1%8F",
-    "https://www.youtube.com/results?search_query=KOLA+-+%D0%94%D0%BE%D1%87%D0%B5%D0%BA%D0%B0%D1%8E%D1%81%D1%8C",
-    "https://www.youtube.com/results?search_query=KOLA+-+%D0%A7%D0%B8+%D1%80%D0%B0%D0%B7%D0%BE%D0%BC%3F",
-    "https://www.youtube.com/results?search_query=KOLA+-+%D0%A6%D1%96%D0%BB%D1%83%D0%B9",
-    "https://www.youtube.com/results?search_query=Jerry+Heil+-+CATHARTICUS",
-    "https://www.youtube.com/results?search_query=Jerry+Heil+-+%D0%A2%D1%80%D0%B8+%D1%81%D0%BC%D1%83%D0%B6%D0%BA%D0%B8",
-    "https://www.youtube.com/results?search_query=Jerry+Heil+-+%23%D0%90%D0%A0%D0%A2%D0%98%D0%9B%D0%95%D0%A0%D0%86%D0%AF",
-    "https://www.youtube.com/results?search_query=alyona+alyona+%26+Jerry+Heil+-+Teresa+%26+Maria",
-    "https://www.youtube.com/results?search_query=alyona+alyona+-+%D0%9F%D1%83%D1%88%D0%BA%D0%B0",
-    "https://www.youtube.com/results?search_query=alyona+alyona+-+%D0%A0%D0%B8%D0%B1%D0%BA%D0%B8",
-    "https://www.youtube.com/results?search_query=DOROFEEVA+-+747",
-    "https://www.youtube.com/results?search_query=DOROFEEVA+-+%D0%AF%D0%BF%D0%BE%D0%BD%D1%96%D1%8F",
-    "https://www.youtube.com/results?search_query=DOROFEEVA+-+%D0%9A%D0%BE%D1%85%D0%B0%D1%8E%2C+%D0%B0%D0%BB%D0%B5+%D0%BD%D0%B5+%D0%B7%D0%BE%D0%B2%D1%81%D1%96%D0%BC",
-    "https://www.youtube.com/results?search_query=DOROFEEVA+-+%D0%A5%D0%B0%D0%B9+%D0%BF%D0%B8%D1%88%D1%83%D1%82%D1%8C",
-    "https://www.youtube.com/results?search_query=DOROFEEVA+-+%D0%A9%D0%BE%D0%B1+%D0%BD%D0%B5+%D0%B1%D1%83%D0%BB%D0%BE",
-    "https://www.youtube.com/results?search_query=Artem+Pivovarov+-+%D0%9C%D1%96%D1%80%D0%B0%D0%B6",
-    "https://www.youtube.com/results?search_query=Artem+Pivovarov+-+%D0%9C%D0%B0%D0%BD%D1%96%D1%84%D0%B5%D1%81%D1%82",
-    "https://www.youtube.com/results?search_query=Artem+Pivovarov+-+%D0%A0%D0%B0%D0%BD%D0%B4%D0%B5%D0%B2%D1%83",
-    "https://www.youtube.com/results?search_query=Artem+Pivovarov+-+8+%D0%B4%D0%B8%D0%B2%D0%BE",
-    "https://www.youtube.com/results?search_query=Artem+Pivovarov+-+%D0%9C%D1%96%D1%81%D1%8F%D1%86%D1%8C",
-    "https://www.youtube.com/results?search_query=Artem+Pivovarov+-+%D0%94%D1%83%D0%BC%D0%B8",
-    "https://www.youtube.com/results?search_query=Artem+Pivovarov+-+%D0%9C%D0%B0%D0%BC%D0%B0",
-    "https://www.youtube.com/results?search_query=Tina+Karol+-+%D0%9D%D1%96%D0%B6%D0%BD%D0%BE",
-    "https://www.youtube.com/results?search_query=Tina+Karol+-+%D0%A3%D0%BA%D1%80%D0%B0%D1%97%D0%BD%D0%B0+%E2%80%94+%D1%86%D0%B5+%D1%82%D0%B8",
-    "https://www.youtube.com/results?search_query=Tina+Karol+-+%D0%97%D0%B4%D0%B0%D1%82%D0%B8%D1%81%D1%8C+%D1%82%D0%B8+%D0%B7%D0%B0%D0%B2%D0%B6%D0%B4%D0%B8+%D0%B2%D1%81%D1%82%D0%B8%D0%B3%D0%BD%D0%B5%D1%88",
-    "https://www.youtube.com/results?search_query=Tina+Karol+-+%D0%A2%D1%80%D0%BE%D1%8F%D0%BD%D0%B4%D0%B8",
-    "https://www.youtube.com/results?search_query=Tina+Karol+-+%D0%9D%D0%B0%D0%BC%D0%B0%D0%BB%D1%8E%D1%8E+%D1%82%D0%BE%D0%B1%D1%96+%D0%B7%D0%BE%D1%80%D1%96",
-    "https://www.youtube.com/results?search_query=Tina+Karol+-+%D0%A1%D0%BA%D0%B0%D0%BD%D0%B4%D0%B0%D0%BB",
-    "https://www.youtube.com/results?search_query=MONATIK+-+%D0%9A%D1%80%D1%83%D0%B6%D0%B8%D1%82",
-    "https://www.youtube.com/results?search_query=MONATIK+-+Vitamin+D",
-    "https://www.youtube.com/results?search_query=MONATIK+-+%D0%90+%D1%89%D0%BE%3F",
-    "https://www.youtube.com/results?search_query=MONATIK+-+%D0%A1%D0%B8%D0%BB%D1%8C%D0%BD%D0%BE",
-    "https://www.youtube.com/results?search_query=Max+Barskih+-+%D0%A1%D0%BB%D1%8C%D0%BE%D0%B7%D0%B8",
-    "https://www.youtube.com/results?search_query=Max+Barskih+-+%D0%91%D1%83%D0%B4%D0%B5+%D0%B2%D0%B5%D1%81%D0%BD%D0%B0",
-    "https://www.youtube.com/results?search_query=Max+Barskih+-+%D0%91%D0%B5%D1%80%D0%B5%D0%B3%D0%B0",
-    "https://www.youtube.com/results?search_query=Max+Barskih+-+Bestseller",
-    "https://www.youtube.com/results?search_query=Max+Barskih+-+%D0%A0%D0%B8%D1%82%D0%BC%D0%B8",
-    "https://www.youtube.com/results?search_query=Max+Barskih+-+%D0%A2%D1%83%D0%BC%D0%B0%D0%BD%D0%B8",
-    "https://www.youtube.com/results?search_query=%D0%90%D0%BD%D1%82%D0%B8%D1%82%D1%96%D0%BB%D0%B0+-+%D0%A4%D0%BE%D1%80%D1%82%D0%B5%D1%86%D1%8F+%D0%91%D0%B0%D1%85%D0%BC%D1%83%D1%82",
-    "https://www.youtube.com/results?search_query=%D0%90%D0%BD%D1%82%D0%B8%D1%82%D1%96%D0%BB%D0%B0+-+%D0%9B%D0%BE%D0%B2%D0%B8+%D0%BC%D0%BE%D0%BC%D0%B5%D0%BD%D1%82",
-    "https://www.youtube.com/results?search_query=%D0%90%D0%BD%D1%82%D0%B8%D1%82%D1%96%D0%BB%D0%B0+-+%D0%92%D0%B4%D0%BE%D0%BC%D0%B0",
-    "https://www.youtube.com/results?search_query=%D0%90%D0%BD%D1%82%D0%B8%D1%82%D1%96%D0%BB%D0%B0+-+%D0%A2%D0%94%D0%9C%D0%95",
-    "https://www.youtube.com/results?search_query=%D0%90%D0%BD%D1%82%D0%B8%D1%82%D1%96%D0%BB%D0%B0+-+%D0%9C%D0%B0%D1%8F%D0%BC%D1%96",
-    "https://www.youtube.com/results?search_query=%D0%90%D0%BD%D1%82%D0%B8%D1%82%D1%96%D0%BB%D0%B0+-+%D0%A4%D0%B0%D1%80%D0%B8",
-    "https://www.youtube.com/results?search_query=%D0%91%D1%83%D0%BC%D0%B1%D0%BE%D0%BA%D1%81+-+%D0%92%D0%B0%D1%85%D1%82%D0%B5%D1%80%D0%B0%D0%BC",
-    "https://www.youtube.com/results?search_query=%D0%91%D1%83%D0%BC%D0%B1%D0%BE%D0%BA%D1%81+-+%D0%9D%D0%B0%D0%BE%D0%B4%D0%B8%D0%BD%D1%86%D1%96",
-    "https://www.youtube.com/results?search_query=%D0%91%D1%83%D0%BC%D0%B1%D0%BE%D0%BA%D1%81+-+%D0%9B%D1%8E%D0%B4%D0%B8",
-    "https://www.youtube.com/results?search_query=%D0%91%D1%83%D0%BC%D0%B1%D0%BE%D0%BA%D1%81+-+%D0%A2%D0%BE4%D1%82%D0%BE",
-    "https://www.youtube.com/results?search_query=%D0%91%D1%83%D0%BC%D0%B1%D0%BE%D0%BA%D1%81+-+%D0%9F%D0%BE%D0%BB%D1%96%D0%BD%D0%B0",
-    "https://www.youtube.com/results?search_query=%D0%91%D1%83%D0%BC%D0%B1%D0%BE%D0%BA%D1%81+-+%D0%9A%D0%B2%D1%96%D1%82%D0%B8+%D0%B2+%D0%B2%D0%BE%D0%BB%D0%BE%D1%81%D1%81%D1%96",
-    "https://www.youtube.com/results?search_query=%D0%9E%D0%BA%D0%B5%D0%B0%D0%BD+%D0%95%D0%BB%D1%8C%D0%B7%D0%B8+-+%D0%91%D0%B5%D0%B7+%D0%B1%D0%BE%D1%8E",
-    "https://www.youtube.com/results?search_query=%D0%9E%D0%BA%D0%B5%D0%B0%D0%BD+%D0%95%D0%BB%D1%8C%D0%B7%D0%B8+-+%D0%9D%D0%B5+%D1%82%D0%B2%D0%BE%D1%8F+%D0%B2%D1%96%D0%B9%D0%BD%D0%B0",
-    "https://www.youtube.com/results?search_query=%D0%9E%D0%BA%D0%B5%D0%B0%D0%BD+%D0%95%D0%BB%D1%8C%D0%B7%D0%B8+-+%D0%9D%D0%B0+%D0%BD%D0%B5%D0%B1%D1%96",
-    "https://www.youtube.com/results?search_query=%D0%9E%D0%BA%D0%B5%D0%B0%D0%BD+%D0%95%D0%BB%D1%8C%D0%B7%D0%B8+-+%D0%AF+%D1%82%D0%B0%D0%BA+%D1%85%D0%BE%D1%87%D1%83",
-    "https://www.youtube.com/results?search_query=%D0%9E%D0%BA%D0%B5%D0%B0%D0%BD+%D0%95%D0%BB%D1%8C%D0%B7%D0%B8+-+%D0%9C%D0%B8%D1%82%D1%8C",
-    "https://www.youtube.com/results?search_query=%D0%9E%D0%BA%D0%B5%D0%B0%D0%BD+%D0%95%D0%BB%D1%8C%D0%B7%D0%B8+-+%D0%92%D1%81%D0%B5+%D0%B1%D1%83%D0%B4%D0%B5+%D0%B4%D0%BE%D0%B1%D1%80%D0%B5",
-    "https://www.youtube.com/results?search_query=%D0%9E%D0%BA%D0%B5%D0%B0%D0%BD+%D0%95%D0%BB%D1%8C%D0%B7%D0%B8+-+%D0%A2%D0%BE%D0%B9+%D0%B4%D0%B5%D0%BD%D1%8C",
-    "https://www.youtube.com/results?search_query=%D0%9E%D0%BA%D0%B5%D0%B0%D0%BD+%D0%95%D0%BB%D1%8C%D0%B7%D0%B8+-+%D0%A2%D0%B0%D0%BC%2C+%D0%B4%D0%B5+%D0%BD%D0%B0%D1%81+%D0%BD%D0%B5%D0%BC%D0%B0",
-    "https://www.youtube.com/results?search_query=%D0%9E%D0%BA%D0%B5%D0%B0%D0%BD+%D0%95%D0%BB%D1%8C%D0%B7%D0%B8+-+%D0%A1%D1%82%D1%80%D1%96%D0%BB%D1%8F%D0%B9",
-    "https://www.youtube.com/results?search_query=%D0%9E%D0%BA%D0%B5%D0%B0%D0%BD+%D0%95%D0%BB%D1%8C%D0%B7%D0%B8+-+%D0%97%D0%B5%D0%BB%D0%B5%D0%BD%D1%96+%D0%BE%D1%87%D1%96",
-    "https://www.youtube.com/results?search_query=%D0%9E%D0%BA%D0%B5%D0%B0%D0%BD+%D0%95%D0%BB%D1%8C%D0%B7%D0%B8+-+%D0%9C%D0%B0%D0%B9%D0%B6%D0%B5+%D0%B2%D0%B5%D1%81%D0%BD%D0%B0",
-    "https://www.youtube.com/results?search_query=%D0%A1%D0%BA%D1%80%D1%8F%D0%B1%D1%96%D0%BD+-+%D0%A1%D1%82%D0%B0%D1%80%D1%96+%D1%84%D0%BE%D1%82%D0%BE%D0%B3%D1%80%D0%B0%D1%84%D1%96%D1%97",
-    "https://www.youtube.com/results?search_query=%D0%A1%D0%BA%D1%80%D1%8F%D0%B1%D1%96%D0%BD+-+%D0%9B%D1%8E%D0%B4%D0%B8+%D1%8F%D0%BA+%D0%BA%D0%BE%D1%80%D0%B0%D0%B1%D0%BB%D1%96",
-    "https://www.youtube.com/results?search_query=%D0%A1%D0%BA%D1%80%D1%8F%D0%B1%D1%96%D0%BD+-+%D0%9C%D1%96%D1%81%D1%86%D1%8F+%D1%89%D0%B0%D1%81%D0%BB%D0%B8%D0%B2%D0%B8%D1%85+%D0%BB%D1%8E%D0%B4%D0%B5%D0%B9",
-    "https://www.youtube.com/results?search_query=%D0%A1%D0%BA%D1%80%D1%8F%D0%B1%D1%96%D0%BD+-+%D0%A1%D0%BF%D0%B8+%D1%81%D0%BE%D0%B1%D1%96+%D1%81%D0%B0%D0%BC%D0%B0",
-    "https://www.youtube.com/results?search_query=%D0%A1%D0%BA%D1%80%D1%8F%D0%B1%D1%96%D0%BD+-+%D0%A8%D0%B0%D0%BC%D0%BF%D0%B0%D0%BD%D1%81%D1%8C%D0%BA%D1%96+%D0%BE%D1%87%D1%96",
-    "https://www.youtube.com/results?search_query=%D0%A1%D0%BA%D1%80%D1%8F%D0%B1%D1%96%D0%BD+-+%D0%9C%D0%B0%D0%BC",
-    "https://www.youtube.com/results?search_query=%D0%A1%D0%BA%D1%80%D1%8F%D0%B1%D1%96%D0%BD+-+%D0%A8%D1%83%D0%BA%D0%B0%D0%B2+%D1%81%D0%B2%D1%96%D0%B9+%D0%B4%D1%96%D0%BC",
-    "https://www.youtube.com/results?search_query=%D0%A1%D0%BA%D1%80%D1%8F%D0%B1%D1%96%D0%BD+-+%D0%9C%D0%B0%D1%80%D1%88%D1%80%D1%83%D1%82%D0%BA%D0%B0",
-    "https://www.youtube.com/results?search_query=%D0%A1%D0%BA%D1%80%D1%8F%D0%B1%D1%96%D0%BD+-+%D0%93%D0%BE%D0%B2%D0%BE%D1%80%D0%B8%D0%BB%D0%B8+%D1%96+%D0%BA%D1%83%D1%80%D0%B8%D0%BB%D0%B8",
-    "https://www.youtube.com/results?search_query=The+Hardkiss+-+%D0%96%D1%83%D1%80%D0%B0%D0%B2%D0%BB%D1%96",
-    "https://www.youtube.com/results?search_query=The+Hardkiss+-+%D0%9F%D1%80%D1%96%D1%80%D0%B2%D0%B0",
-    "https://www.youtube.com/results?search_query=The+Hardkiss+-+%D0%96%D0%B8%D0%B2%D0%B0",
-    "https://www.youtube.com/results?search_query=The+Hardkiss+-+%D0%90%D0%BD%D1%82%D0%B0%D1%80%D0%BA%D1%82%D0%B8%D0%B4%D0%B0",
-    "https://www.youtube.com/results?search_query=The+Hardkiss+-+Make-Up",
-    "https://www.youtube.com/results?search_query=The+Hardkiss+-+%D0%9A%D0%BE%D1%80%D0%B0%D0%B1%D0%BB%D1%96",
-    "https://www.youtube.com/results?search_query=Go_A+-+SHUM",
-    "https://www.youtube.com/watch?v=NBB0DGJSbJM",
-    "https://www.youtube.com/results?search_query=Go_A+-+Solovey",
-    "https://www.youtube.com/results?search_query=Go_A+-+Kalyna",
-    "https://www.youtube.com/results?search_query=Go_A+-+%D0%96%D0%B0%D0%BB%D1%8C",
-    "https://www.youtube.com/results?search_query=Tvorchi+-+Heart+of+Steel",
-    "https://www.youtube.com/results?search_query=Tvorchi+-+%D0%9C%D0%BE%D0%B2%D0%B0+%D1%82%D1%96%D0%BB%D0%B0",
-    "https://www.youtube.com/results?search_query=Tvorchi+-+%D0%91%D0%BE%D1%80%D0%B5%D0%BC%D0%BE%D1%81%D1%8F",
-    "https://www.youtube.com/results?search_query=Tvorchi+-+%D0%92%D1%96%D1%87-%D0%BD%D0%B0-%D0%B2%D1%96%D1%87",
-    "https://www.youtube.com/results?search_query=Tvorchi+-+%D0%9C%D0%B8%D0%BB%D0%B0+%D0%BC%D0%BE%D1%8F",
-    "https://www.youtube.com/results?search_query=%D0%A5%D1%80%D0%B8%D1%81%D1%82%D0%B8%D0%BD%D0%B0+%D0%A1%D0%BE%D0%BB%D0%BE%D0%B2%D1%96%D0%B9+-+%D0%A5%D1%82%D0%BE%2C+%D1%8F%D0%BA+%D0%BD%D0%B5+%D1%82%D0%B8%3F",
-    "https://www.youtube.com/results?search_query=%D0%A5%D1%80%D0%B8%D1%81%D1%82%D0%B8%D0%BD%D0%B0+%D0%A1%D0%BE%D0%BB%D0%BE%D0%B2%D1%96%D0%B9+-+Fortepiano",
-    "https://www.youtube.com/results?search_query=%D0%A5%D1%80%D0%B8%D1%81%D1%82%D0%B8%D0%BD%D0%B0+%D0%A1%D0%BE%D0%BB%D0%BE%D0%B2%D1%96%D0%B9+-+%D0%9E%D1%81%D1%96%D0%BD%D1%8C",
-    "https://www.youtube.com/results?search_query=%D0%A5%D1%80%D0%B8%D1%81%D1%82%D0%B8%D0%BD%D0%B0+%D0%A1%D0%BE%D0%BB%D0%BE%D0%B2%D1%96%D0%B9+-+%D0%9B%D1%8E%D0%B1%D0%B8%D0%B9+%D0%B4%D1%80%D1%83%D0%B3",
-    "https://www.youtube.com/results?search_query=%D0%A5%D1%80%D0%B8%D1%81%D1%82%D0%B8%D0%BD%D0%B0+%D0%A1%D0%BE%D0%BB%D0%BE%D0%B2%D1%96%D0%B9+-+%D0%A3%D0%BA%D1%80%D0%B0%D1%97%D0%BD%D1%81%D1%8C%D0%BA%D0%B0+%D0%BB%D1%8E%D1%82%D1%8C",
-    "https://www.youtube.com/results?search_query=Jamala+-+1944",
-    "https://www.youtube.com/results?search_query=Jamala+-+%D0%9A%D1%80%D0%B8%D0%BB%D0%B0",
-    "https://www.youtube.com/results?search_query=Jamala+-+%D0%A8%D0%BB%D1%8F%D1%85+%D0%B4%D0%BE%D0%B4%D0%BE%D0%BC%D1%83",
-    "https://www.youtube.com/results?search_query=Jamala+-+Solo",
-    "https://www.youtube.com/results?search_query=MELOVIN+-+%D0%A2%D0%B8",
-    "https://www.youtube.com/results?search_query=MELOVIN+-+%D0%97%D0%B0%D0%BC%D0%B0%D0%BD%D0%B8%D0%BB%D0%B8",
-    "https://www.youtube.com/results?search_query=MELOVIN+-+%D0%9E%D0%B1%D0%B8%D1%80%D0%B0%D1%82%D0%B8%D0%BC%D1%83+%D1%82%D0%B5%D0%B1%D0%B5",
-    "https://www.youtube.com/results?search_query=Wellboy+-+%D0%92%D0%B8%D1%88%D0%BD%D1%96",
-    "https://www.youtube.com/results?search_query=Wellboy+-+%D0%94%D0%BE%D0%B4%D0%BE%D0%BC%D1%83",
-    "https://www.youtube.com/results?search_query=CHEEV+-+%D0%93%D0%B0%D1%80%D0%BD%D0%BE+%D1%82%D0%B0%D0%BA",
-    "https://www.youtube.com/results?search_query=CHEEV+-+%D0%A0%D0%B0%D0%BD%D0%B0",
-    "https://www.youtube.com/results?search_query=CHEEV+-+%D0%9C%D1%80%D1%96%D1%94%D1%88%D1%81%D1%8F",
-    "https://www.youtube.com/results?search_query=CHEEV+-+Good+Luck",
-    "https://www.youtube.com/results?search_query=ADAM+-+%D0%9F%D0%BE%D0%B2%D1%96%D0%BB%D1%8C%D0%BD%D0%BE",
-    "https://www.youtube.com/results?search_query=ADAM+-+%D0%A1%D0%B8%D0%BB%D1%8C%D0%BD%D0%BE-%D1%81%D0%B8%D0%BB%D1%8C%D0%BD%D0%BE",
-    "https://www.youtube.com/results?search_query=ADAM+-+%D0%A2%D0%B0%D0%BA%D1%83+%D1%8F%D0%BA+%D1%94",
-    "https://www.youtube.com/results?search_query=ADAM+-+%D0%9B%D1%8E%D0%B1%D0%B0",
-    "https://www.youtube.com/results?search_query=MamaRika+-+%D0%AF+%D0%B7%D0%B0%D0%BA%D0%BE%D1%85%D0%B0%D0%BB%D0%B0%D1%81%D1%8F",
-    "https://www.youtube.com/results?search_query=MamaRika+-+%D0%A1%D0%B8%D0%BD%D1%83",
-    "https://www.youtube.com/results?search_query=MamaRika+-+%D0%9D%D0%B0+%D0%BD%D0%B0%D1%88%D1%96%D0%B9+%D0%B2%D1%83%D0%BB%D0%B8%D1%86%D1%96",
-    "https://www.youtube.com/results?search_query=MamaRika+-+%D0%9B%D1%8E%D0%B4%D0%B8+%D1%8F%D0%BA+%D0%BA%D0%BE%D1%80%D0%B0%D0%B1%D0%BB%D1%96",
-    "https://www.youtube.com/results?search_query=MamaRika+-+%D0%9A%D0%BE%D0%BB%D0%B8+%D0%BC%D0%B8+%D0%B2%D0%B4%D0%BE%D0%BC%D0%B0",
-    "https://www.youtube.com/results?search_query=%D0%90%D0%BD%D0%BD%D0%B0+%D0%A2%D1%80%D1%96%D0%BD%D1%87%D0%B5%D1%80+-+%D0%9C%D0%B5%D1%82%D0%B5%D0%BB%D0%B8%D0%BA%D0%B8",
-    "https://www.youtube.com/results?search_query=%D0%90%D0%BD%D0%BD%D0%B0+%D0%A2%D1%80%D1%96%D0%BD%D1%87%D0%B5%D1%80+-+%D0%97%D0%B0%D0%B9",
-    "https://www.youtube.com/results?search_query=%D0%90%D0%BD%D0%BD%D0%B0+%D0%A2%D1%80%D1%96%D0%BD%D1%87%D0%B5%D1%80+-+%D0%9C%D0%B0%D1%80%D0%B3%D0%B0%D1%80%D0%B8%D1%82%D0%B0",
-    "https://www.youtube.com/results?search_query=%D0%90%D0%BD%D0%BD%D0%B0+%D0%A2%D1%80%D1%96%D0%BD%D1%87%D0%B5%D1%80+-+%D0%9B%D0%B8%D1%88%D0%B5+%D1%82%D0%B8+%D1%96+%D1%8F",
-    "https://www.youtube.com/results?search_query=%D0%90%D0%BD%D0%BD%D0%B0+%D0%A2%D1%80%D1%96%D0%BD%D1%87%D0%B5%D1%80+-+%D0%9E%D1%87%D1%96",
-    "https://www.youtube.com/results?search_query=Parfeniuk+-+%D0%92%D1%80%D1%83%D0%B1%D0%B0%D0%B9",
-    "https://www.youtube.com/results?search_query=Parfeniuk+-+%D0%9F%D1%80%D0%BE%D0%B2%D0%B5%D0%BB%D0%B0+%D0%B5%D0%BA%D1%81%D0%BA%D1%83%D1%80%D1%81%D1%96%D1%8E",
-    "https://www.youtube.com/results?search_query=Parfeniuk+-+%D0%92%D1%96%D0%B4%D1%80%D0%B8%D0%B2%D0%B0%D0%B9%D1%81%D1%8F",
-    "https://www.youtube.com/results?search_query=Chico+%26+Qatoshi+-+%D0%9B%D0%B0%D1%81%D1%82%D1%96%D0%B2%D0%BA%D0%B8",
-    "https://www.youtube.com/results?search_query=Chico+%26+Qatoshi+-+%D0%9F%D0%BE%D0%BA%D0%BE%D1%85%D0%B0%D0%B9+%D0%BC%D0%B5%D0%BD%D0%B5",
-    "https://www.youtube.com/results?search_query=100%D0%BB%D0%B8%D1%86%D1%8F+-+%D0%A2%D1%80%D0%BE%D1%8F%D0%BD%D0%B4%D0%B8",
-    "https://www.youtube.com/results?search_query=100%D0%BB%D0%B8%D1%86%D1%8F+-+%D0%97%D0%A1%D0%A3",
-    "https://www.youtube.com/results?search_query=PROBASS+%26+HARDI+-+%D0%94%D0%BE%D0%B1%D1%80%D0%BE%D0%B3%D0%BE+%D0%B2%D0%B5%D1%87%D0%BE%D1%80%D0%B0",
-    "https://www.youtube.com/results?search_query=PROBASS+%26+HARDI+-+%D0%9A%D0%BE%D0%B7%D0%B0%D1%86%D1%8C%D0%BA%D0%BE%D0%BC%D1%83+%D1%80%D0%BE%D0%B4%D1%83",
-    "https://www.youtube.com/results?search_query=SHUMEI+-+%D0%A0%D0%BE%D0%B7%D1%81%D1%82%D1%80%D1%96%D0%BB%D1%8F%D0%BD%D0%B5",
-    "https://www.youtube.com/results?search_query=SHUMEI+-+%D0%91%D1%83%D1%80%D0%B5%D0%B2%D1%96%D1%8F%D0%BC%D0%B8",
-    "https://www.youtube.com/results?search_query=SHUMEI+-+%D0%A2%D1%80%D0%B8%D0%B2%D0%BE%D0%B3%D0%B0",
-    "https://www.youtube.com/results?search_query=SHUMEI+-+%D0%92%D1%96%D1%82%D0%B5%D1%80",
-    "https://www.youtube.com/results?search_query=DREVO+-+%D0%95%D0%BD%D0%BA%D0%B0%D1%80%D0%B0%D0%BF%D1%96%D1%81%D1%82%D0%B0",
-    "https://www.youtube.com/results?search_query=DREVO+-+%D0%A1%D0%B0%D0%BC%D0%BE%D0%BB%D1%96%D1%82%D0%BE%D0%BC",
-    "https://www.youtube.com/results?search_query=DREVO+-+%D0%92%D1%96%D1%87%D0%BD%D1%96%D1%81%D1%82%D1%8C",
-    "https://www.youtube.com/results?search_query=%D0%9D%D1%96%D0%BA%D1%96%D1%82%D0%B0+%D0%9A%D1%96%D1%81%D0%B5%D0%BB%D1%8C%D0%BE%D0%B2+-+%D0%92%D1%96%D0%B2%D1%82%D0%B0%D1%80",
-    "https://www.youtube.com/results?search_query=%D0%9D%D1%96%D0%BA%D1%96%D1%82%D0%B0+%D0%9A%D1%96%D1%81%D0%B5%D0%BB%D1%8C%D0%BE%D0%B2+-+%D0%9A%D1%80%D0%B8%D0%BB%D0%B0+%D0%BB%D0%B5%D0%BB%D0%B5%D0%BA%D0%B8",
-    "https://www.youtube.com/results?search_query=%D0%9D%D1%96%D0%BA%D1%96%D1%82%D0%B0+%D0%9A%D1%96%D1%81%D0%B5%D0%BB%D1%8C%D0%BE%D0%B2+-+%D0%A0%D0%BE%D0%BC%D0%B0%D1%88%D0%BA%D0%B0",
-    "https://www.youtube.com/results?search_query=Lida+Lee+-+%D0%A1%D1%85%D0%BE%D0%B6%D1%96",
-    "https://www.youtube.com/results?search_query=Lida+Lee+-+%D0%9F%D0%BE%D1%8F%D1%81%D0%BD%D0%B8",
-    "https://www.youtube.com/results?search_query=Lida+Lee+-+%D0%97%D0%BE%D1%80%D1%96",
-    "https://www.youtube.com/results?search_query=Volodymyr+Dantes+-+%D0%A2%D0%B8+%D0%BD%D0%B5+%D0%B7%D0%B0%D0%B1%D1%83%D0%B2%D0%B0%D0%B9",
-    "https://www.youtube.com/results?search_query=Volodymyr+Dantes+-+%D0%9E%D0%BB%D1%8F",
-    "https://www.youtube.com/results?search_query=Volodymyr+Dantes+-+%D0%9A%D0%B8%D1%82%D0%B8",
-    "https://www.youtube.com/results?search_query=POSITIFF+-+%D0%9D%D0%B5+%D0%B7%D1%83%D0%BF%D0%B8%D0%BD%D1%8F%D0%B9+%D0%B2%D0%B5%D1%87%D1%96%D1%80%D0%BA%D1%83",
-    "https://www.youtube.com/results?search_query=POSITIFF+-+%D0%A1%D0%BF%D0%B0%D0%BB%D0%B0%D1%85%D0%B8",
-    "https://www.youtube.com/results?search_query=POSITIFF+-+%D0%91%D1%83%D0%B4%D1%83+%D0%BA%D0%BE%D1%85%D0%B0%D1%82%D0%B8",
-    "https://www.youtube.com/results?search_query=FI%D0%87NKA+-+%D0%92%D1%96%D0%B2%D1%82%D0%B0%D1%80",
-    "https://www.youtube.com/results?search_query=FI%D0%87NKA+-+%D0%93%D1%83%D1%86%D1%83%D0%BB%D1%8F%D0%BD%D0%BA%D0%B0",
-    "https://www.youtube.com/results?search_query=FI%D0%87NKA+-+%D0%93%D1%80%D1%83%D1%88%D0%B5%D1%87%D0%BA%D0%B0",
-    "https://www.youtube.com/results?search_query=VOLIANSKA+-+%D0%9A%D1%83%D1%81%D1%8C",
-    "https://www.youtube.com/results?search_query=%D0%A3%D0%BB%D1%8F%D0%BD%D0%B0+%D0%A8%D1%83%D0%B1%D0%B0+-+%D0%9E%D0%B9%2C+%D0%BC%D0%B0%D0%BC",
-    "https://www.youtube.com/results?search_query=SKYLERR+-+%D0%93%D0%BE%D1%80%D0%BB%D0%B8%D1%86%D1%96",
-    "https://www.youtube.com/results?search_query=SKYLERR+-+%D0%9B%D1%96%D0%B4+%D1%96+%D0%B2%D0%BE%D0%B3%D0%BE%D0%BD%D1%8C",
-    "https://www.youtube.com/results?search_query=Alena+Omargalieva+-+%D0%9D%D0%B5+%D0%BF%27%D1%8F%D0%BD%D0%B0+-+%D0%B7%D0%B0%D0%BA%D0%BE%D1%85%D0%B0%D0%BD%D0%B0",
-    "https://www.youtube.com/results?search_query=Alena+Omargalieva+-+%D0%A4%D0%B0%D0%BD%D0%B0%D1%82",
-    "https://www.youtube.com/results?search_query=YAGODA+-+%D0%97%D0%B0%D0%BA%D0%BE%D1%85%D0%B0%D0%BB%D0%B0%D1%81%D1%8C+%D0%B4%D0%B8%D0%BA%D0%BE",
-    "https://www.youtube.com/results?search_query=YAGODA+%26+MELISA+SADYK+-+%D0%A7%D0%BE%D0%B1%D0%BE%D1%82%D0%B8",
-    "https://www.youtube.com/results?search_query=YAGODA+-+%D0%AE%D1%80%D0%B0",
-    "https://www.youtube.com/results?search_query=%D0%A8%D1%83%D0%B3%D0%B0%D1%80+-+%D0%9E%D0%BB%D1%94%D0%B3",
-    "https://www.youtube.com/results?search_query=Kolaba+%26+%D0%86%D0%B2%D0%BE+%D0%91%D0%BE%D0%B1%D1%83%D0%BB+-+%D0%90+%D0%BB%D0%B8%D0%BF%D0%B8+%D1%86%D0%B2%D1%96%D1%82%D1%83%D1%82%D1%8C",
-    "https://www.youtube.com/results?search_query=TARABAROVA+-+%D0%9C%D0%B5%D0%B9%D0%B1%D1%96",
-    "https://www.youtube.com/results?search_query=CHEEV+-+%D0%9C%D1%96%D1%81%D1%86%D1%8F",
-    "https://www.youtube.com/results?search_query=Kalush+Orchestra+%26+SIMBOCHKA+-+%D0%9D%D1%96%D0%BA%D0%BE%D0%BC%D1%83+%D0%BD%D0%B5+%D1%81%D0%BA%D0%B0%D0%B6%D0%B5%D0%BC%D0%BE",
-    "https://www.youtube.com/results?search_query=Artem+Pivovarov+%26+The+%D0%92%D1%83%D1%81%D0%B0+%26+%D0%A1%D1%82%D0%B5%D0%BF%D0%B0%D0%BD+%D0%93%D1%96%D0%B3%D0%B0+-+Mamma+Mia",
-    "https://www.youtube.com/results?search_query=%D0%9E%D0%B4%D0%B8%D0%BD+%D0%B2+%D0%BA%D0%B0%D0%BD%D0%BE%D0%B5+-+%D0%A7%D0%BE%D0%B2%D0%B5%D0%BD",
-    "https://www.youtube.com/results?search_query=%D0%9E%D0%B4%D0%B8%D0%BD+%D0%B2+%D0%BA%D0%B0%D0%BD%D0%BE%D0%B5+-+%D0%A3+%D0%BC%D0%B5%D0%BD%D0%B5+%D0%BD%D0%B5%D0%BC%D0%B0%D1%94+%D0%B4%D0%BE%D0%BC%D1%83",
-    "https://www.youtube.com/results?search_query=%D0%9E%D0%B4%D0%B8%D0%BD+%D0%B2+%D0%BA%D0%B0%D0%BD%D0%BE%D0%B5+-+%D0%9D%D0%B5%D0%B1%D0%BE",
-    "https://www.youtube.com/results?search_query=%D0%91%D0%95%D0%97+%D0%9E%D0%91%D0%9C%D0%95%D0%96%D0%95%D0%9D%D0%AC+-+%D0%97%D0%BE%D1%80%D1%96+%D0%B7%D0%B0%D0%BF%D0%B0%D0%BB%D0%B0%D0%BB%D0%B8",
-    "https://www.youtube.com/results?search_query=%D0%91%D0%95%D0%97+%D0%9E%D0%91%D0%9C%D0%95%D0%96%D0%95%D0%9D%D0%AC+-+%D0%A2%D0%BE%D0%BD%D1%83",
-    "https://www.youtube.com/results?search_query=%D0%91%D0%95%D0%97+%D0%9E%D0%91%D0%9C%D0%95%D0%96%D0%95%D0%9D%D0%AC+-+%D0%9C%D1%96%D0%BB%D1%8C%D1%8F%D1%80%D0%B4%D0%B8",
-    "https://www.youtube.com/results?search_query=%D0%91%D0%95%D0%97+%D0%9E%D0%91%D0%9C%D0%95%D0%96%D0%95%D0%9D%D0%AC+-+%D0%97%D0%BD%D0%B0%D0%B9%D0%B4%D0%B8+%D0%BC%D0%B5%D0%BD%D0%B5",
-    "https://www.youtube.com/results?search_query=%D0%91%D0%95%D0%97+%D0%9E%D0%91%D0%9C%D0%95%D0%96%D0%95%D0%9D%D0%AC+-+%D0%A5%D0%BE%D1%87%D0%B5%D1%88",
-    "https://www.youtube.com/results?search_query=%D0%91%D0%95%D0%97+%D0%9E%D0%91%D0%9C%D0%95%D0%96%D0%95%D0%9D%D0%AC+-+%D0%94%D0%B8%D0%BC",
-    "https://www.youtube.com/results?search_query=Pianoboy+-+%D0%9A%D0%BE%D1%85%D0%B0%D0%BD%D0%BD%D1%8F",
-    "https://www.youtube.com/results?search_query=Pianoboy+-+%D0%A0%D0%BE%D0%B4%D0%B8%D0%BC%D0%BA%D0%B8",
-    "https://www.youtube.com/results?search_query=Pianoboy+-+%D0%A8%D0%B0%D0%BC%D0%BF%D0%B0%D0%BD%D1%81%D1%8C%D0%BA%D1%96+%D0%BE%D1%87%D1%96",
-    "https://www.youtube.com/results?search_query=Latexfauna+-+Surfer",
-    "https://www.youtube.com/results?search_query=Latexfauna+-+Bounty",
-    "https://www.youtube.com/results?search_query=Latexfauna+-+Aubergine",
-    "https://www.youtube.com/results?search_query=%D0%9E.Torvald+-+%D0%92%D0%B8%D1%80%D0%B2%D0%B0%D0%BD%D0%B8%D0%B9",
-    "https://www.youtube.com/results?search_query=%D0%9E.Torvald+-+%D0%9C%D0%BE%D0%B2%D1%87%D0%B8",
-    "https://www.youtube.com/results?search_query=%D0%9E.Torvald+-+%D0%A4%D0%BE%D1%82%D0%BE%D0%B3%D1%80%D0%B0%D1%84%D1%83%D0%B9",
-    "https://www.youtube.com/results?search_query=%D0%92%D0%BE%D0%BF%D0%BB%D1%96+%D0%92%D1%96%D0%B4%D0%BE%D0%BF%D0%BB%D1%8F%D1%81%D0%BE%D0%B2%D0%B0+-+%D0%92%D0%B5%D1%81%D0%BD%D0%B0",
-    "https://www.youtube.com/results?search_query=%D0%92%D0%BE%D0%BF%D0%BB%D1%96+%D0%92%D1%96%D0%B4%D0%BE%D0%BF%D0%BB%D1%8F%D1%81%D0%BE%D0%B2%D0%B0+-+%D0%94%D0%B5%D0%BD%D1%8C+%D0%BD%D0%B0%D1%80%D0%BE%D0%B4%D0%B6%D0%B5%D0%BD%D0%BD%D1%8F",
-    "https://www.youtube.com/results?search_query=%D0%92%D0%BE%D0%BF%D0%BB%D1%96+%D0%92%D1%96%D0%B4%D0%BE%D0%BF%D0%BB%D1%8F%D1%81%D0%BE%D0%B2%D0%B0+-+%D0%A2%D0%B0%D1%94%D0%BC%D0%BD%D0%B8%D1%86%D1%96",
-    "https://www.youtube.com/results?search_query=%D0%9F%D0%BB%D0%B0%D1%87+%D0%84%D1%80%D0%B5%D0%BC%D1%96%D1%97+-+%D0%92%D0%BE%D0%BD%D0%B0",
-    "https://www.youtube.com/results?search_query=%D0%9F%D0%BB%D0%B0%D1%87+%D0%84%D1%80%D0%B5%D0%BC%D1%96%D1%97+-+%D0%A1%D1%82%D0%B0%D1%80%D1%96+%D1%84%D0%BE%D1%82%D0%BE%D0%B3%D1%80%D0%B0%D1%84%D1%96%D1%97",
-    "https://www.youtube.com/results?search_query=%D0%94%D1%80%D1%83%D0%B3%D0%B0+%D0%A0%D1%96%D0%BA%D0%B0+-+%D0%A2%D1%80%D0%B8+%D1%85%D0%B2%D0%B8%D0%BB%D0%B8%D0%BD%D0%B8",
-    "https://www.youtube.com/results?search_query=%D0%94%D1%80%D1%83%D0%B3%D0%B0+%D0%A0%D1%96%D0%BA%D0%B0+-+%D0%A2%D0%B0%D0%BA+%D0%BC%D0%B0%D0%BB%D0%BE+%D1%82%D1%83%D1%82+%D1%82%D0%B5%D0%B1%D0%B5",
-    "https://www.youtube.com/results?search_query=%D0%94%D1%80%D1%83%D0%B3%D0%B0+%D0%A0%D1%96%D0%BA%D0%B0+-+%D0%92%D0%B6%D0%B5+%D0%BD%D0%B5+%D1%81%D0%B0%D0%BC",
-    "https://www.youtube.com/results?search_query=%D0%A1%D0%9A%D0%90%D0%99+-+%D0%A2%D0%B5%D0%B1%D0%B5+%D1%86%D0%B5+%D0%BC%D0%BE%D0%B6%D0%B5+%D0%B2%D0%B1%D0%B8%D1%82%D0%B8",
-    "https://www.youtube.com/results?search_query=%D0%A1%D0%9A%D0%90%D0%99+-+%D0%9F%D0%BE%D0%B4%D0%B0%D1%80%D1%83%D0%B9+%D0%BC%D0%B5%D0%BD%D1%96+%D0%BB%D1%8E%D0%B1%D0%BE%D0%B2",
-    "https://www.youtube.com/results?search_query=%D0%A1%D0%9A%D0%90%D0%99+-+Best+%D0%94%D1%80%D1%83%D0%B3",
-    "https://www.youtube.com/results?search_query=%D0%91%D1%80%D0%B0%D1%82%D0%B8+%D0%93%D0%B0%D0%B4%D1%8E%D0%BA%D1%96%D0%BD%D0%B8+-+%D0%9D%D0%B0%D1%80%D0%BA%D0%BE%D0%BC%D0%B0%D0%BD%D0%B8+%D0%BD%D0%B0+%D0%B3%D0%BE%D1%80%D0%BE%D0%B4%D1%96",
-    "https://www.youtube.com/results?search_query=%D0%91%D1%80%D0%B0%D1%82%D0%B8+%D0%93%D0%B0%D0%B4%D1%8E%D0%BA%D1%96%D0%BD%D0%B8+-+%D0%A4%D0%B0%D0%B9%D0%BD%D0%B5+%D0%BC%D1%96%D1%81%D1%82%D0%BE+%D0%A2%D0%B5%D1%80%D0%BD%D0%BE%D0%BF%D1%96%D0%BB%D1%8C",
-    "https://www.youtube.com/results?search_query=%D0%86%D1%80%D0%B8%D0%BD%D0%B0+%D0%91%D1%96%D0%BB%D0%B8%D0%BA+-+%D0%A2%D0%B0%D0%BA+%D0%BF%D1%80%D0%BE%D1%81%D1%82%D0%BE",
-    "https://www.youtube.com/results?search_query=%D0%86%D1%80%D0%B8%D0%BD%D0%B0+%D0%91%D1%96%D0%BB%D0%B8%D0%BA+-+%D0%90+%D1%8F+%D0%BF%D0%BB%D0%B8%D0%B2%D1%83",
-    "https://www.youtube.com/results?search_query=%D0%86%D1%80%D0%B8%D0%BD%D0%B0+%D0%91%D1%96%D0%BB%D0%B8%D0%BA+-+%D0%A2%D0%B8+%D0%BC%D1%96%D0%B9",
-    "https://www.youtube.com/results?search_query=%D0%9D%D0%B0%D1%82%D0%B0%D0%BB%D0%BA%D0%B0+%D0%9A%D0%B0%D1%80%D0%BF%D0%B0+-+%D0%9A%D0%B0%D0%BB%D0%B0%D0%BC%D0%B1%D1%83%D1%80",
-    "https://www.youtube.com/results?search_query=%D0%9D%D0%B0%D1%82%D0%B0%D0%BB%D0%BA%D0%B0+%D0%9A%D0%B0%D1%80%D0%BF%D0%B0+-+%D0%9D%D0%B5+%D0%BF%D1%96%D0%B4%D0%B2%D0%B5%D0%B4%D0%B8",
-    "https://www.youtube.com/results?search_query=%D0%A0%D1%83%D1%81%D0%BB%D0%B0%D0%BD%D0%B0+-+%D0%94%D0%B8%D0%BA%D1%96+%D1%82%D0%B0%D0%BD%D1%86%D1%96",
-    "https://www.youtube.com/results?search_query=%D0%A0%D1%83%D1%81%D0%BB%D0%B0%D0%BD%D0%B0+-+%D0%97%D0%BD%D0%B0%D1%8E+%D1%8F",
-    "https://www.youtube.com/results?search_query=KAZKA+-+%D0%A1%D0%B2%D1%8F%D1%82%D0%B0",
-    "https://www.youtube.com/results?search_query=KAZKA+-+%D0%9C%27%D1%8F%D1%82%D0%B0",
-    "https://www.youtube.com/results?search_query=KAZKA+-+%D0%9A%D0%BE%D0%BB%D1%8C%D0%BE%D1%80%D0%BE%D0%B2%D1%96",
-    "https://www.youtube.com/results?search_query=NK+-+%D0%9E%D0%B1%D1%96%D1%86%D1%8F%D1%8E",
-    "https://www.youtube.com/results?search_query=NK+-+%D0%A7%D0%B5%D1%80%D0%B2%D0%BE%D0%BD%D0%B5+%D0%B2%D0%B8%D0%BD%D0%BE",
-    "https://www.youtube.com/results?search_query=NK+-+Elefante",
-    "https://www.youtube.com/results?search_query=NK+-+%D0%9F%D0%BE%D0%BF%D0%B0+%D1%8F%D0%BA+%D1%83+%D0%9A%D1%96%D0%BC",
-    "https://www.youtube.com/results?search_query=LAUD+-+%D0%A1%D0%B2%D1%96%D1%82%D0%BB%D0%BE%D0%BE%D1%85%D0%BE%D1%80%D0%BE%D0%BD%D0%B5%D1%86%D1%8C",
-    "https://www.youtube.com/results?search_query=LAUD+-+2+%D0%B4%D0%BD%D1%96",
-    "https://www.youtube.com/results?search_query=LAUD+-+%D0%A3+%D1%86%D1%8E+%D0%BD%D1%96%D1%87",
-    "https://www.youtube.com/results?search_query=%D0%86%D0%B2%D0%B0%D0%BD+NAVI+-+%D0%A2%D0%B0%D0%BA%D1%96+%D0%BC%D0%BE%D0%BB%D0%BE%D0%B4%D1%96",
-    "https://www.youtube.com/results?search_query=%D0%86%D0%B2%D0%B0%D0%BD+NAVI+-+%D0%A2%D0%B8%D0%BC%D1%87%D0%B0%D1%81%D0%BE%D0%B2%D0%B8%D0%B9+%D1%80%D0%B5%D0%BB%D0%B0%D0%BA%D1%81",
-    "https://www.youtube.com/results?search_query=%D0%86%D0%B2%D0%B0%D0%BD+NAVI+-+%D0%A5%D1%96%D0%BC%D1%96%D1%8F",
-    "https://www.youtube.com/results?search_query=%D0%94%D0%BC%D0%B8%D1%82%D1%80%D0%BE+%D0%A8%D1%83%D1%80%D0%BE%D0%B2+-+%D0%9A%D0%BE%D1%85%D0%B0%D0%BD%D0%BD%D1%8F",
-    "https://www.youtube.com/results?search_query=%D0%9E%D0%BB%D1%8F+%D0%9F%D0%BE%D0%BB%D1%8F%D0%BA%D0%BE%D0%B2%D0%B0+-+%D0%9A%D0%BE%D1%80%D0%BE%D0%BB%D0%B5%D0%B2%D0%B0+%D0%BD%D0%BE%D1%87%D1%96",
-    "https://www.youtube.com/results?search_query=%D0%9E%D0%BB%D1%8F+%D0%9F%D0%BE%D0%BB%D1%8F%D0%BA%D0%BE%D0%B2%D0%B0+-+%D0%A8%D0%BB%D1%8C%D0%BE%D0%BF%D0%BA%D0%B8",
-    "https://www.youtube.com/results?search_query=%D0%9D%D0%B0%D1%81%D1%82%D1%8F+%D0%9A%D0%B0%D0%BC%D0%B5%D0%BD%D1%81%D1%8C%D0%BA%D0%B8%D1%85+-+%D0%9E%D0%B1%D1%96%D1%86%D1%8F%D1%8E",
-    "https://www.youtube.com/results?search_query=%D0%9D%D0%B0%D1%81%D1%82%D1%8F+%D0%9A%D0%B0%D0%BC%D0%B5%D0%BD%D1%81%D1%8C%D0%BA%D0%B8%D1%85+-+%D0%9F%D0%BE%D0%BF%D0%B0+%D0%BA%D0%B0%D0%BA+%D1%83+%D0%9A%D0%B8%D0%BC",
-    "https://www.youtube.com/results?search_query=%D0%9D%D0%B0%D1%81%D1%82%D1%8F+%D0%9A%D0%B0%D0%BC%D0%B5%D0%BD%D1%81%D1%8C%D0%BA%D0%B8%D1%85+-+%D0%9A%D1%80%D0%B0%D1%81%D0%BD%D0%BE%D0%B5+%D0%B2%D0%B8%D0%BD%D0%BE",
-    "https://www.youtube.com/results?search_query=MONATIK+%26+DOROFEEVA+-+%D0%93%D0%BB%D1%83%D0%B1%D0%BE%D0%BA%D0%BE",
-    "https://www.youtube.com/results?search_query=MONATIK+%26+%D0%92%D1%96%D1%80%D0%B0+%D0%91%D1%80%D0%B5%D0%B6%D0%BD%D1%94%D0%B2%D0%B0+-+%D0%92%D1%96%D1%80%D1%83%D1%8E",
-    "https://www.youtube.com/results?search_query=%D0%90%D1%80%D1%81%D0%B5%D0%BD+%D0%9C%D1%96%D1%80%D0%B7%D0%BE%D1%8F%D0%BD+-+%D0%86%D0%B2%D0%B0%D0%BD%D0%B0+%D0%9A%D1%83%D0%BF%D0%B0%D0%BB%D0%B0",
-    "https://www.youtube.com/results?search_query=%D0%90%D1%80%D1%81%D0%B5%D0%BD+%D0%9C%D1%96%D1%80%D0%B7%D0%BE%D1%8F%D0%BD+-+%D0%9F%D0%BE%D1%86%D1%96%D0%BB%D1%83%D0%B9+%D0%BC%D0%B5%D0%BD%D0%B5",
-    "https://www.youtube.com/results?search_query=%D0%A2%D1%96%D0%BD%D0%B0+%D0%9A%D0%B0%D1%80%D0%BE%D0%BB%D1%8C+-+%D0%9D%D0%B0%D0%BC%D0%B0%D0%BB%D1%8E%D1%8E+%D1%82%D0%BE%D0%B1%D1%96+%D0%B7%D0%BE%D1%80%D1%96",
-    "https://www.youtube.com/results?search_query=%D0%A1%D0%B5%D1%80%D0%B3%D1%96%D0%B9+%D0%91%D0%B0%D0%B1%D0%BA%D1%96%D0%BD+-+%D0%94%D0%B5+%D0%B1%D0%B8+%D1%8F",
-    "https://www.youtube.com/results?search_query=%D0%A1%D0%B5%D1%80%D0%B3%D1%96%D0%B9+%D0%91%D0%B0%D0%B1%D0%BA%D1%96%D0%BD+-+%D0%9F%D1%80%D0%BE%D0%B1%D0%B0%D1%87",
-    "https://www.youtube.com/results?search_query=%D0%A1%D0%B5%D1%80%D0%B3%D1%96%D0%B9+%D0%91%D0%B0%D0%B1%D0%BA%D1%96%D0%BD+-+%D0%9C%D0%BE%D1%8F+%D0%BB%D1%8E%D0%B1%D0%BE%D0%B2",
-    "https://www.youtube.com/results?search_query=%D0%9E%D0%BB%D0%B5%D0%BA%D1%81%D0%B0%D0%BD%D0%B4%D1%80+%D0%9F%D0%BE%D0%BD%D0%BE%D0%BC%D0%B0%D1%80%D1%8C%D0%BE%D0%B2+-+%D0%AF+%D0%BB%D1%8E%D0%B1%D0%BB%D1%8E+%D1%82%D1%96%D0%BB%D1%8C%D0%BA%D0%B8+%D1%82%D0%B5%D0%B1%D0%B5",
-    "https://www.youtube.com/results?search_query=%D0%9E%D0%BB%D0%B5%D0%BA%D1%81%D0%B0%D0%BD%D0%B4%D1%80+%D0%9F%D0%BE%D0%BD%D0%BE%D0%BC%D0%B0%D1%80%D1%8C%D0%BE%D0%B2+-+%D0%92%D0%B0%D1%80%D1%82%D0%BE",
-    "https://www.youtube.com/results?search_query=%D0%92%D1%96%D1%82%D0%B0%D0%BB%D1%96%D0%B9+%D0%9A%D0%BE%D0%B7%D0%BB%D0%BE%D0%B2%D1%81%D1%8C%D0%BA%D0%B8%D0%B9+-+%D0%9F%D1%96%D0%BD%D0%B0+%D0%B4%D0%BD%D1%96%D0%B2",
-    "https://www.youtube.com/results?search_query=%D0%92%D1%96%D1%82%D0%B0%D0%BB%D1%96%D0%B9+%D0%9A%D0%BE%D0%B7%D0%BB%D0%BE%D0%B2%D1%81%D1%8C%D0%BA%D0%B8%D0%B9+-+%D0%9C%D0%BE%D1%94+%D0%BC%D0%BE%D1%80%D0%B5",
-    "https://www.youtube.com/results?search_query=%D0%92%D1%96%D1%82%D0%B0%D0%BB%D1%96%D0%B9+%D0%9A%D0%BE%D0%B7%D0%BB%D0%BE%D0%B2%D1%81%D1%8C%D0%BA%D0%B8%D0%B9+-+%D0%A2%D1%96%D0%BB%D1%8C%D0%BA%D0%B8+%D0%BA%D0%BE%D1%85%D0%B0%D0%BD%D0%BD%D1%8F",
 ]
 
 RANDOM_SONGS_URLS = [
     "https://www.youtube.com/watch?v=pgN-vvVVxMA",
     "https://www.youtube.com/watch?v=P1t9T1TAOBI",
     "https://www.youtube.com/watch?v=GX8Hg6kWQYI",
-    "https://www.youtube.com/watch?v=iAeYPfrXwk4",
-    "https://www.youtube.com/watch?v=nyxRebRhaK0",
-    "https://www.youtube.com/watch?v=maigqMT9KPw&t=1716s",
-    "https://www.youtube.com/watch?v=zq2pagG8_ok",
-    "https://www.youtube.com/watch?v=LqxcHcdGkvM",
-    "https://www.youtube.com/watch?v=MIuJVYNvC-s",
-    "https://www.youtube.com/watch?v=GFihEj6DAtM",
-    "https://www.youtube.com/watch?v=W0DM5lcj6mw",
-    "https://www.youtube.com/watch?v=SA7AIQw-7Ms",
-    "https://www.youtube.com/watch?v=nidQCt_HEsY",
-    "https://www.youtube.com/watch?v=cEQ6-8J-P3I",
-    "https://www.youtube.com/watch?v=oPA0z4W-kcU ",
-    "https://www.youtube.com/watch?v=Na_LRWNbyJ8",
-    "https://www.youtube.com/watch?v=6PNPx0koe2E&list=PLQdn7YisXz3PS9dJjn3H35ohAkXleMoVM",
-    "https://www.youtube.com/watch?v=mZBtA4iQZmQ",
-    "https://www.youtube.com/watch?v=5Fv19KVVya8",
-    "https://www.youtube.com/watch?v=04x3RshrpG8",
-    "https://www.youtube.com/watch?v=feGgQxcNYZ0",
-    "https://www.youtube.com/watch?v=0_wQc-6uAME",
-    "https://www.youtube.com/watch?v=zQ7Zrowa-gY",
-    "https://www.youtube.com/watch?v=MBG3Gdt5OGs",
-    "https://www.youtube.com/watch?v=WJF5Z1WRcqw",
-    "https://www.youtube.com/watch?v=yH5FTh3OfPE",
-    "https://www.youtube.com/watch?v=NZffGy4TLno",
-    "https://www.youtube.com/watch?v=pY-WQxgx2b8",
-    "https://www.youtube.com/watch?v=i3U9Eesh-Ys",
-    "https://www.youtube.com/watch?v=E2nDCLsGsqQ",
-    "https://www.youtube.com/watch?v=9CDJpnIDS4c",
-    "https://www.youtube.com/watch?v=l7v8DAbIOx0&list=RDEMMyKIrFtyXwr_Bmk8U4B2zg&start_radio=1&rv=9CDJpnIDS4c",
-    "https://www.youtube.com/watch?v=hgNaOU0UOaQ&list=RDEMMyKIrFtyXwr_Bmk8U4B2zg&index=2",
-    "https://www.youtube.com/watch?v=3rkJ3L5Ce80&list=RDEMMyKIrFtyXwr_Bmk8U4B2zg&index=3",
-    "https://www.youtube.com/watch?v=p1uh40IvF4c&list=RDEMMyKIrFtyXwr_Bmk8U4B2zg&index=4",
-    "https://www.youtube.com/watch?v=IuG3PhJOKRM&list=RDEMMyKIrFtyXwr_Bmk8U4B2zg&index=5",
-    "https://www.youtube.com/watch?v=pzv8DhGXOa8&list=RDEMMyKIrFtyXwr_Bmk8U4B2zg&index=6",
-    "https://www.youtube.com/watch?v=uHu28rVAg_I&list=RDEMMyKIrFtyXwr_Bmk8U4B2zg&index=7",
-    "https://www.youtube.com/watch?v=IyuJP9S68n0&list=RDEMMyKIrFtyXwr_Bmk8U4B2zg&index=8",
-    "https://www.youtube.com/watch?v=Qzm44kVp7QA&list=RDEMMyKIrFtyXwr_Bmk8U4B2zg&index=9",
-    "https://www.youtube.com/watch?v=dZ9v9PYCWoM&list=RDEMMyKIrFtyXwr_Bmk8U4B2zg&index=10",
-    "https://www.youtube.com/watch?v=XALLZHKnS_U&list=RDEMMyKIrFtyXwr_Bmk8U4B2zg&index=11",
-    "https://www.youtube.com/watch?v=GRvRIS--JRo&list=RDEMMyKIrFtyXwr_Bmk8U4B2zg&index=12",
-    "https://www.youtube.com/watch?v=unrs1wnz0r4&list=RDEMMyKIrFtyXwr_Bmk8U4B2zg&index=13",
-    "https://www.youtube.com/watch?v=dqdbVlU1f0M&list=RDEMMyKIrFtyXwr_Bmk8U4B2zg&index=14",
-    "https://www.youtube.com/watch?v=VbqVh6iUFS4&list=RDEMMyKIrFtyXwr_Bmk8U4B2zg&index=15",
-    "https://www.youtube.com/watch?v=zuBKLzYirMc&list=RDEMMyKIrFtyXwr_Bmk8U4B2zg&index=16",
-    "https://www.youtube.com/watch?v=napUAIh4UE0&list=RDEMMyKIrFtyXwr_Bmk8U4B2zg&index=17",
-    "https://www.youtube.com/watch?v=jWDwdYSdM64&list=RDEMMyKIrFtyXwr_Bmk8U4B2zg&index=18",
-    "https://www.youtube.com/watch?v=c-5jld1Uf0g&list=RDEMMyKIrFtyXwr_Bmk8U4B2zg&index=19",
-    "https://www.youtube.com/watch?v=wDsU4H2w48k&list=RDEMMyKIrFtyXwr_Bmk8U4B2zg&index=20",
-    "https://www.youtube.com/watch?v=eA4_E4Qvsw0&list=RDEMMyKIrFtyXwr_Bmk8U4B2zg&index=21",
-    "https://www.youtube.com/watch?v=PhHI1bXG3Yo&list=RDEMMyKIrFtyXwr_Bmk8U4B2zg&index=22",
-    "https://www.youtube.com/watch?v=aD1IyIBdqjQ&list=RDEMMyKIrFtyXwr_Bmk8U4B2zg&index=23",
-    "https://www.youtube.com/watch?v=FZ-he-64ms4&list=RDEMMyKIrFtyXwr_Bmk8U4B2zg&index=24",
-    "https://www.youtube.com/watch?v=PtqM4ThqZUc&list=RDEMMyKIrFtyXwr_Bmk8U4B2zg&index=25",
-    "https://www.youtube.com/watch?v=lsH2M6OcS_g&list=RDEMMyKIrFtyXwr_Bmk8U4B2zg&index=26",
-    "https://www.youtube.com/watch?v=gCDPTnpYvtc&list=RDEMMyKIrFtyXwr_Bmk8U4B2zg&index=29",
-    "https://www.youtube.com/watch?v=-q68__Slg-8&list=RDEMMyKIrFtyXwr_Bmk8U4B2zg&index=27",
-    "https://www.youtube.com/watch?v=szEgSYloU-0&list=RDEMMyKIrFtyXwr_Bmk8U4B2zg&index=27",
-    "https://www.youtube.com/watch?v=6i8eq93gYHM&list=RDEMMyKIrFtyXwr_Bmk8U4B2zg&index=28",
-    "https://www.youtube.com/watch?v=ZOI8ib7k4Ic&list=RDEMMyKIrFtyXwr_Bmk8U4B2zg&index=27",
-    "https://www.youtube.com/watch?v=BFSpI9aJ4As&list=RDEMMyKIrFtyXwr_Bmk8U4B2zg&index=27",
-    "https://www.youtube.com/watch?v=KpPcmkuYjfw&list=RDEMMyKIrFtyXwr_Bmk8U4B2zg&index=27",
-    "https://www.youtube.com/watch?v=BRtQfVtAHxY&list=RDEMMyKIrFtyXwr_Bmk8U4B2zg&index=27",
-    "https://www.youtube.com/watch?v=EsX-0VBb0j0&list=RDEMMyKIrFtyXwr_Bmk8U4B2zg&index=27",
-    "https://www.youtube.com/watch?v=tMfVDZZno88&list=RDEMMyKIrFtyXwr_Bmk8U4B2zg&index=27",
-    "https://www.youtube.com/watch?v=hQO0Adj-tfw&list=RDEMMyKIrFtyXwr_Bmk8U4B2zg&index=38",
-    "https://www.youtube.com/watch?v=-Rdo49VtEJs&list=RDEMMyKIrFtyXwr_Bmk8U4B2zg&index=34",
-    "https://www.youtube.com/watch?v=MyB3AlaCSDU&list=RDEMMyKIrFtyXwr_Bmk8U4B2zg&index=50",
-    "https://www.youtube.com/watch?v=DDPecetdvMM",
 ]
 
 
 # ============================================================
-# ОСНОВНЫЕ ФУНКЦИИ
+# ФУНКЦИИ КОМАНД
 # ============================================================
 
 def minimize_all_windows():
-    """Сворачивает все открытые окна (Win + M)."""
     if not play_sound("minimize_all") and not play_sound("minimize"):
         play_sound("ok")
-
-    # Используем Win + M для сворачивания всех окон
     pyautogui.hotkey('win', 'm')
-    print("[Стелла]: Все окна свернуты (Win + M)")
+    print("[Стелла]: Все окна свернуты")
     return True
 
 
 def minimize_window(target_raw: str):
-    """Сворачивает конкретное окно по названию приложения."""
     target_clean = target_raw.lower().strip()
     app_key = APP_TRANSLIT_MAP.get(target_clean, target_clean)
     exe_name = APP_EXE_MAP.get(app_key, app_key)
@@ -628,36 +1370,19 @@ def minimize_window(target_raw: str):
     if not play_sound(f"minimize_{app_key}") and not play_sound("minimize"):
         play_sound("ok")
 
-    # Находим окно по имени процесса
     win = get_window_by_exe_name(exe_name)
-
     if win:
         try:
             if win.isMinimized:
-                print(f"[Стелла]: Окно '{win.title or app_key}' уже свернуто.")
                 return True
             win.minimize()
-            print(f"[Стелла]: Окно '{win.title or app_key}' свернуто.")
             return True
-        except Exception as e:
-            print(f"[Ошибка сворачивания окна]: {e}")
-            play_sound("error")
+        except:
             return False
-    else:
-        print(f"[Ошибка]: Окно программы '{target_raw}' не найдено.")
-        play_sound("error")
-        return False
-
-
-def toggle_fullscreen():
-    """Фокусирует текущее активное окно и разворачивает его на весь экран."""
-    pyautogui.hotkey("f")
-    if not play_sound("fullscreen"):
-        play_sound()
+    return False
 
 
 def change_language():
-    """Смена языка ввода на ПК (Alt + Shift)."""
     if not play_sound("change_lang"):
         if not play_sound("language"):
             play_sound("ok")
@@ -666,25 +1391,20 @@ def change_language():
 
 
 def play_ukrainian_song():
-    """Воспроизводит случайную украинскую песню на YouTube."""
     if not play_sound("ukr_song") and not play_sound("ukr"):
         play_sound("ok")
     url = random.choice(UKRAINIAN_SONGS_URLS)
-    print(f"[Музыка]: Рандомно выбрана украинская песня -> {url}")
     webbrowser.open(url)
 
 
 def play_random_song():
-    """Воспроизводит случайную песню на YouTube."""
     if not play_sound("random_song") and not play_sound("random"):
         play_sound("ok")
     url = random.choice(RANDOM_SONGS_URLS)
-    print(f"[Музыка]: Рандомно выбрана случайная песня -> {url}")
     webbrowser.open(url)
 
 
 def get_window_by_exe_name(exe_name: str):
-    """Находит окно приложения по названию его .exe процесса."""
     target_exe = exe_name.lower()
     if not target_exe.endswith(".exe"):
         target_exe += ".exe"
@@ -694,7 +1414,7 @@ def get_window_by_exe_name(exe_name: str):
         try:
             if proc.info['name'] and proc.info['name'].lower() == target_exe:
                 matching_pids.add(proc.info['pid'])
-        except (psutil.NoSuchProcess, psutil.AccessDenied):
+        except:
             continue
 
     if not matching_pids:
@@ -710,19 +1430,12 @@ def get_window_by_exe_name(exe_name: str):
                 _, win_pid = win32process.GetWindowThreadProcessId(w._hWnd)
                 if win_pid in matching_pids and w.visible:
                     return w
-        except Exception:
+        except:
             pass
-
-    clean_name = exe_name.replace(".exe", "").lower()
-    for w in all_wins:
-        if w.title and clean_name in w.title.lower():
-            return w
-
     return None
 
 
 def move_window_to_monitor(target_raw: str):
-    """Перемещает активное окно или окно с указанным именем на 1-й или 2-й монитор."""
     target_clean = target_raw.lower().strip()
 
     target_monitor = None
@@ -731,19 +1444,15 @@ def move_window_to_monitor(target_raw: str):
     elif "второй" in target_clean or "2" in target_clean or "два" in target_clean:
         target_monitor = 2
     else:
-        print("[Ошибка]: Не указан номер монитора (первый/второй или 1/2).")
         play_sound("error")
         return False
 
-    words_to_remove = [
-        "на", "в", "до", "экран", "монитор", "первый", "второй",
-        "1", "2", "один", "два", "переведи", "перемести", "перекинь", "отправь"
-    ]
+    words_to_remove = ["на", "в", "до", "экран", "монитор", "первый", "второй", "1", "2", "один", "два",
+                       "переведи", "перемести", "перекинь", "отправь"]
     cleaned_query_words = [w for w in target_clean.split() if w not in words_to_remove]
     app_query_str = " ".join(cleaned_query_words).strip()
 
     win = None
-
     if not app_query_str or any(w in app_query_str for w in ["окно", "это", "текущее", "активное"]):
         win = gw.getActiveWindow()
     else:
@@ -752,87 +1461,24 @@ def move_window_to_monitor(target_raw: str):
         win = get_window_by_exe_name(exe_name)
 
     if not win:
-        print(f"[Ошибка]: Окно программы '{app_query_str}' не найдено среди запущенных.")
         play_sound("error")
         return False
 
     PRIMARY_MONITOR_WIDTH = 1920
-
-    if target_monitor == 1:
-        new_x = 100
-    else:
-        new_x = PRIMARY_MONITOR_WIDTH + 100
-
-    new_y = 100
+    new_x = 100 if target_monitor == 1 else PRIMARY_MONITOR_WIDTH + 100
 
     try:
         if win.isMinimized:
             win.restore()
         if win.isMaximized:
             win.restore()
-
-        win.moveTo(new_x, new_y)
+        win.moveTo(new_x, 100)
         win.maximize()
-
-        print(f"[Успех]: Окно '{win.title or app_query_str}' перемещено на монитор {target_monitor}.")
-        if not play_sound("move") and not play_sound("move_window"):
-            play_sound("Okno")
+        play_sound("move")
         return True
-    except Exception as e:
-        print(f"[Ошибка перемещения]: {e}")
+    except:
         play_sound("error")
         return False
-
-
-# Добавьте эту функцию после импортов
-def send_ctrl_a():
-    """Отправляет Ctrl+A несколькими способами для гарантии"""
-    try:
-        # Способ 1: через pyautogui (обычный)
-        pyautogui.hotkey('ctrl', 'a')
-        return True
-    except Exception as e1:
-        print(f"[PyAutoGUI Ctrl+A] Ошибка: {e1}")
-        try:
-            # Способ 2: через keyboard (более низкий уровень)
-            keyboard.press('ctrl')
-            time.sleep(0.05)
-            keyboard.press('a')
-            time.sleep(0.05)
-            keyboard.release('a')
-            time.sleep(0.05)
-            keyboard.release('ctrl')
-            return True
-        except Exception as e2:
-            print(f"[Keyboard Ctrl+A] Ошибка: {e2}")
-            try:
-                # Способ 3: через keybd_event (Win API) - самый надёжный
-                import ctypes
-                from ctypes import wintypes
-
-                # Константы клавиш
-                VK_CONTROL = 0x11
-                VK_A = 0x41
-                KEYEVENTF_KEYDOWN = 0x0000
-                KEYEVENTF_KEYUP = 0x0002
-
-                user32 = ctypes.windll.user32
-
-                # Нажимаем Ctrl
-                user32.keybd_event(VK_CONTROL, 0, KEYEVENTF_KEYDOWN, 0)
-                time.sleep(0.05)
-                # Нажимаем A
-                user32.keybd_event(VK_A, 0, KEYEVENTF_KEYDOWN, 0)
-                time.sleep(0.05)
-                # Отпускаем A
-                user32.keybd_event(VK_A, 0, KEYEVENTF_KEYUP, 0)
-                time.sleep(0.05)
-                # Отпускаем Ctrl
-                user32.keybd_event(VK_CONTROL, 0, KEYEVENTF_KEYUP, 0)
-                return True
-            except Exception as e3:
-                print(f"[WinAPI Ctrl+A] Ошибка: {e3}")
-                return False
 
 
 CONTROL_COMMANDS = {
@@ -845,13 +1491,13 @@ CONTROL_COMMANDS = {
     "дабл клик": lambda: pyautogui.doubleClick(),
     "двойной клик": lambda: pyautogui.doubleClick(),
     "пауза": lambda: pyautogui.press("space"),
-    "выдели все": lambda:  keyboard.press_and_release('ctrl+a'),
+    "выдели все": lambda: keyboard.press_and_release('ctrl+a'),
     "выдели": lambda: keyboard.press_and_release('ctrl+a'),
     "скопировать": lambda: keyboard.press_and_release('ctrl+c'),
     "скопируй": lambda: keyboard.press_and_release('ctrl+c'),
     "копируй": lambda: keyboard.press_and_release('ctrl+c'),
     "вставить": lambda: keyboard.press_and_release('ctrl+v'),
-    "вставь":lambda: keyboard.press_and_release('ctrl+v'),
+    "вставь": lambda: keyboard.press_and_release('ctrl+v'),
     "отправь": lambda: keyboard.press_and_release('enter'),
     "скрин": lambda: pyautogui.press("printscreen"),
     "скриншот": lambda: pyautogui.press("printscreen"),
@@ -867,64 +1513,38 @@ CONTROL_COMMANDS = {
 
 
 def play_sound_worker(file_path: str):
-    """Воспроизведение звука с проверкой soundfile."""
     try:
         if HAS_SOUNDFILE:
             data, fs = sf.read(file_path, dtype="float32")
             sd.play(data, fs)
             sd.wait()
-    except Exception as e:
-        print(f"[Звук Ошибка]: {e}")
+    except:
+        pass
 
 
 def play_sound(sound_name: str) -> bool:
-    """Ищет и воспроизводит аудиофайл из папки sounds."""
     if not os.path.exists(SOUNDS_DIR):
         return False
 
     target_clean = sound_name.lower().strip()
-    mapped_name = APP_TRANSLIT_MAP.get(target_clean, target_clean)
-
-    if "тик" in target_clean:
-        mapped_name = "tiktok"
-    elif "ютуб" in target_clean:
-        mapped_name = "youtube"
-    elif "вк" in target_clean or "контакт" in target_clean:
-        mapped_name = "vk"
-
-    variants = {
-        target_clean,
-        target_clean.replace(" ", ""),
-        target_clean.replace(" ", "_"),
-        mapped_name,
-        mapped_name.replace(" ", ""),
-        mapped_name.replace(" ", "_"),
-    }
-
     for file in os.listdir(SOUNDS_DIR):
         file_base, ext = os.path.splitext(file)
         if ext.lower() not in [".wav", ".mp3", ".ogg", ".flac"]:
             continue
-
-        if file_base.lower() in variants:
+        if file_base.lower() == target_clean or file_base.lower() == target_clean.replace(" ", "_"):
             sound_path = os.path.join(SOUNDS_DIR, file)
-            print(f"[Звук]: Воспроизведение -> {file}")
-            threading.Thread(
-                target=play_sound_worker, args=(sound_path,), daemon=True
-            ).start()
+            threading.Thread(target=play_sound_worker, args=(sound_path,), daemon=True).start()
             return True
-
     return False
 
 
 def load_app_cache() -> dict:
     if not os.path.exists(JSON_CACHE_FILE):
-        save_app_cache({})
         return {}
     try:
         with open(JSON_CACHE_FILE, "r", encoding="utf-8") as f:
             return json.load(f)
-    except (json.JSONDecodeError, OSError):
+    except:
         return {}
 
 
@@ -933,16 +1553,7 @@ def save_app_cache(cache_data: dict):
         json.dump(cache_data, f, ensure_ascii=False, indent=4)
 
 
-def get_available_drives() -> list[str]:
-    drives = []
-    for letter in string.ascii_uppercase:
-        drive_path = f"{letter}:\\"
-        if os.path.exists(drive_path):
-            drives.append(drive_path)
-    return drives
-
-
-def find_exe_fast_registry(exe_name: str) -> str | None:
+def find_exe_fast_registry(exe_name: str):
     if not exe_name.endswith(".exe"):
         exe_name = f"{exe_name}.exe"
 
@@ -954,21 +1565,15 @@ def find_exe_fast_registry(exe_name: str) -> str | None:
                 path, _ = winreg.QueryValueEx(key, "")
                 if os.path.exists(path):
                     return path
-        except OSError:
+        except:
             continue
     return None
 
 
-def search_exe_on_disks(exe_name: str) -> str | None:
-    target_exe = (
-        exe_name.lower()
-        if exe_name.endswith(".exe")
-        else f"{exe_name}.exe".lower()
-    )
+def search_exe_on_disks(exe_name: str):
+    target_exe = exe_name.lower() if exe_name.endswith(".exe") else f"{exe_name}.exe".lower()
     drives = get_available_drives()
     priority_dirs = ["Program Files", "Program Files (x86)", "Users", "Games"]
-
-    print(f"[Поиск ПК] Сканирую диски для '{target_exe}'...")
 
     for drive in drives:
         for p_dir in priority_dirs:
@@ -980,15 +1585,11 @@ def search_exe_on_disks(exe_name: str) -> str | None:
                             return os.path.join(root, file)
 
         for root, _, files in os.walk(drive):
-            if any(
-                    skip in root.lower()
-                    for skip in ["$recycle.bin", "windows\\winsxs", "windows\\servicing"]
-            ):
+            if any(skip in root.lower() for skip in ["$recycle.bin", "windows\\winsxs", "windows\\servicing"]):
                 continue
             for file in files:
                 if file.lower() == target_exe:
                     return os.path.join(root, file)
-
     return None
 
 
@@ -1006,69 +1607,47 @@ def launch_application(target_raw: str):
     if app_key in cache:
         cached_path = cache[app_key]
         if os.path.exists(cached_path):
-            print(f"[Кэш JSON]: Запуск из saveAppPty.json -> {cached_path}")
             os.startfile(cached_path)
             return True
 
     found_path = find_exe_fast_registry(exe_name)
-
     if not found_path:
         found_path = search_exe_on_disks(exe_name)
 
     if found_path and os.path.exists(found_path):
-        print(f"[Успех]: Приложение найдено -> {found_path}")
         cache[app_key] = found_path
         save_app_cache(cache)
         os.startfile(found_path)
         return True
 
     try:
-        subprocess.Popen(
-            exe_name,
-            shell=True,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-        )
+        subprocess.Popen(exe_name, shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         return True
-    except Exception:
+    except:
         pass
 
-    print(
-        f"[Ошибка]: Не удалось найти программу '{target_raw}' (искали: {exe_name})"
-    )
     play_sound("error")
     return False
 
 
 def kill_application(target_raw: str):
-    """Принудительно закрывает процесс приложения через taskkill с озвучкой close_<app_key>."""
     target_clean = target_raw.lower().strip()
     app_key = APP_TRANSLIT_MAP.get(target_clean, target_clean)
-
-    specific_close_sound = f"close_{app_key}"
-
-    if not play_sound(specific_close_sound):
-        if not play_sound("close"):
-            play_sound("ok")
-
-    # ИСПОЛЬЗУЕМ PROCESS_KILL_MAP для закрытия
     exe_name = PROCESS_KILL_MAP.get(app_key, app_key)
+
     if not exe_name.endswith(".exe"):
         exe_name += ".exe"
 
-    print(f"[Убить процесс]: Завершение {exe_name}...")
+    if not play_sound(f"close_{app_key}"):
+        if not play_sound("close"):
+            play_sound("ok")
 
     cmd = f'taskkill /F /IM "{exe_name}"'
-
-    result = subprocess.run(
-        cmd, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True
-    )
+    result = subprocess.run(cmd, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
 
     if result.returncode == 0:
-        print(f"[Успех]: Процесс {exe_name} успешно завершен.")
         return True
     else:
-        print(f"[Ошибка]: Процесс {exe_name} не найден или не может быть закрыт.")
         play_sound("error")
         return False
 
@@ -1081,35 +1660,25 @@ def open_website(target_raw: str):
 
     if target_clean in WEB_URLS_MAP:
         url_or_list = WEB_URLS_MAP[target_clean]
-
         if isinstance(url_or_list, list):
-            print(f"[Веб]: Открываю {len(url_or_list)} ссылок")
             for url in url_or_list:
-                print(f"[Веб]: Перехожу на {url}")
                 webbrowser.open(url)
         else:
-            url = url_or_list
-            print(f"[Веб]: Перехожу на {url}")
-            webbrowser.open(url)
+            webbrowser.open(url_or_list)
         return True
 
     if "." in target_clean and not target_clean.endswith(".exe"):
-        url = (
-            f"https://{target_clean}"
-            if not target_clean.startswith("http")
-            else target_clean
-        )
-        print(f"[Веб]: Перехожу на {url}")
+        url = f"https://{target_clean}" if not target_clean.startswith("http") else target_clean
         webbrowser.open(url)
         return True
 
     search_url = f"https://www.google.com/search?q={target_clean}"
-    print(f"[Веб]: Ищу в Google -> {target_clean}")
     webbrowser.open(search_url)
     return True
 
 
-def process_command(text: str):
+def process_command(text: str, interface):
+    """Обработка голосовой команды"""
     cleaned = text.lower().strip()
     words = cleaned.split()
 
@@ -1118,228 +1687,159 @@ def process_command(text: str):
 
     print(f"\n[Распознано]: {text}")
 
-    # Убираем триггер-слова
-    filtered_words = [w for w in words if w not in TRIGGER_WORDS]
+    interface.set_processing(True)
+    interface.show_command(text[:40])
 
-    # Убираем мат и стоп-слова (важно!)
+    filtered_words = [w for w in words if w not in TRIGGER_WORDS]
     filtered_words = [w for w in filtered_words if w not in BAD_WORDS]
 
     if not filtered_words:
         print("[Стелла]: Слушаю вас!")
         play_sound("da")
+        interface.set_processing(False)
         return
 
     phrase_after_trigger = " ".join(filtered_words).strip()
 
-    # 0. СВОРАЧИВАНИЕ ВСЕХ ОКОН (Win + M)
     if "все" in filtered_words and any(w in filtered_words for w in ["окна", "окон", "окно"]):
-        play_sound("vseokna")
         minimize_all_windows()
+        interface.set_processing(False)
         return
 
-    # Сворачивание конкретного окна
     for verb in MINIMIZE_VERBS:
         if verb in filtered_words:
             if "все" in filtered_words and any(w in filtered_words for w in ["окна", "окон", "окно"]):
                 continue
-
             target = " ".join([w for w in filtered_words if w != verb]).strip()
             if target:
-                print(f"[Стелла]: Сворачиваю окно -> {target}")
                 minimize_window(target)
-                return
             else:
                 win = gw.getActiveWindow()
                 if win:
                     try:
                         win.minimize()
-                        print("[Стелла]: Активное окно свернуто.")
-                        play_sound("minimize") or play_sound("ok")
+                        play_sound("minimize")
                     except:
-                        print("[Ошибка]: Не удалось свернуть активное окно.")
-                        play_sound("error")
-                return
+                        pass
+            interface.set_processing(False)
+            return
 
-    # 1. ПРИОРИТЕТНЫЕ МУЗЫКАЛЬНЫЕ КОМАНДЫ
     if any(w in phrase_after_trigger for w in ["украинскую", "укр"]) and "песн" in phrase_after_trigger:
         play_ukrainian_song()
+        interface.set_processing(False)
         return
 
     if any(w in phrase_after_trigger for w in ["рандомную", "рандом", "случайную"]) and "песн" in phrase_after_trigger:
         play_random_song()
+        interface.set_processing(False)
         return
 
-    # 2. Перемещение окон на мониторы
     for verb in MOVE_VERBS:
         if verb in filtered_words:
             target = " ".join([w for w in filtered_words if w != verb]).strip()
             if target:
-                print(f"[Стелла]: Перемещение окна -> {target}")
                 move_window_to_monitor(target)
-                return
+            interface.set_processing(False)
+            return
 
-    # 3. Обработка команды "напиши" (печать текста) через keyboard
     for verb in WRITE_VERBS:
         if verb in filtered_words:
             verb_index = filtered_words.index(verb)
             text_to_type = " ".join(filtered_words[verb_index + 1:]).strip()
-
             if text_to_type:
-                print(f"[Стелла]: Печатаю текст -> {text_to_type}")
-
                 if not play_sound("write"):
-                    play_sound("Pechat")
-
+                    play_sound("ok")
                 time.sleep(0.1)
                 keyboard.write(text_to_type, delay=0.02)
-
                 if verb in ["напечатай", "набор"]:
                     keyboard.press_and_release('enter')
+            interface.set_processing(False)
+            return
 
-                return
-            else:
-                print("[Стелла]: Не указан текст для печати")
-                play_sound("error")
-                return
-
-    # 4. Запуск локальных приложений
     for verb in APP_VERBS:
         if verb in filtered_words:
             target = " ".join([w for w in filtered_words if w != verb]).strip()
             if target:
-                print(f"[Стелла]: Запуск приложения -> {target}")
                 launch_application(target)
-                return
+            interface.set_processing(False)
+            return
 
-    # 4.5. Открытие веб-сайтов
     for verb in WEB_VERBS:
         if verb in filtered_words:
             target = " ".join([w for w in filtered_words if w != verb]).strip()
             if target:
-                print(f"[Стелла]: Открываю сайт -> {target}")
                 open_website(target)
-                return
+            interface.set_processing(False)
+            return
 
-    # 5. Закрытие приложений
     for verb in CLOSE_VERBS:
         if verb in filtered_words:
             target = " ".join([w for w in filtered_words if w != verb]).strip()
             if target:
-                print(f"[Стелла]: Закрытие процесса -> {target}")
                 kill_application(target)
-                return
+            interface.set_processing(False)
+            return
 
-    # 6. Смена языка
     for verb in LANG_VERBS:
         if verb in filtered_words:
             target = " ".join([w for w in filtered_words if w != verb]).strip()
             if target in ["язык", "раскладку"]:
-                print("[Стелла]: Смена языка ввода...")
                 change_language()
-                return
+            interface.set_processing(False)
+            return
 
-    # 7. Команды управления интерфейсом
     if phrase_after_trigger in CONTROL_COMMANDS:
-        print(f"[Стелла]: Выполнение команды -> '{phrase_after_trigger}'")
         CONTROL_COMMANDS[phrase_after_trigger]()
+        interface.set_processing(False)
         return
 
-    # 8. Разговорные ответы
     if phrase_after_trigger in GREETINGS_MAP:
         text_response, sound_variants = GREETINGS_MAP[phrase_after_trigger]
         print(f"[Стелла]: {text_response}")
-
-        sound_played = False
         for s_name in sound_variants:
             if play_sound(s_name):
-                sound_played = True
                 break
-
-        if not sound_played:
-            play_sound("ok")
+        interface.set_processing(False)
         return
 
     print(f"[Стелла]: Команда '{phrase_after_trigger}' не распознана.")
     play_sound("error")
+    interface.set_processing(False)
 
 
-def audio_callback(indata, frames, time, status):
-    audio_queue.put(indata.copy())
-
+# ============================================================
+# ГЛАВНАЯ ФУНКЦИЯ
+# ============================================================
 
 def main():
-    word_buffer = []
-    silence_counter = 0
-    is_speaking = False
-
+    # Создаём папку для звуков
     if not os.path.exists(SOUNDS_DIR):
         os.makedirs(SOUNDS_DIR)
-        print(f"[Инфо]: Создана папка для звуков -> {SOUNDS_DIR}")
+        print(f"📁 Создана папка для звуков: {SOUNDS_DIR}")
+
+    # Авторизация ДО запуска Stella AI.
+    if not require_stella_key():
+        sys.exit(0)
 
     load_app_cache()
 
-    print("=" * 60)
-    print("Детектор 'Стелла' активен.")
-    print("Команды:")
-    print("  'Стелла НАПИШИ [текст]'      -> Мгновенная печать текста")
-    print("  'Стелла СВЕРНИ ВСЕ ОКНА'     -> Свернуть все окна (Win + M)")
-    print("  'Стелла СВЕРНИ [прогу]'      -> Свернуть конкретное окно")
-    print("  'Стелла ВКЛЮЧИ украинскую песню' -> Укр треки на YouTube")
-    print("  'Стелла ВКЛЮЧИ рандомную песню'  -> Рандомный трек")
-    print("  'Стелла ОТКРОЙ [сайт]'       -> Сайты")
-    print("  'Стелла ЗАПУСТИ [прогу]'     -> Программы (.exe)")
-    print("  'Стелла ЗАКРОЙ [прогу]'      -> Завершить процесс")
-    print("  'Стелла ПЕРЕВЕДИ окно на 2 монитор' -> Перемещение окна")
-    print("  'Стелла ИЗМЕНИ ЯЗЫК'         -> Переключить язык")
-    print("=" * 60)
-    print("💡 Новые команды сворачивания:")
-    print("   - 'Стелла СВЕРНИ ВСЕ ОКНА' - сворачивает все окна (Win + M)")
-    print("   - 'Стелла СВЕРНИ ДИСКОРД'  - сворачивает конкретное окно")
-    print("=" * 60)
+    # Создаём интерфейс
+    interface = MisideInterface()
 
-    with sd.InputStream(
-            samplerate=sample_rate,
-            channels=1,
-            dtype="float32",
-            blocksize=800,
-            callback=audio_callback,
-    ):
-        while True:
-            try:
-                data = audio_queue.get(timeout=0.02)
-            except queue.Empty:
-                continue
+    # Запускаем голосовой ассистент в отдельном потоке
+    voice_thread = threading.Thread(
+        target=voice_assistant_thread,
+        args=(interface, recognizer, audio_queue, sample_rate, ENERGY_THRESHOLD, SILENCE_LIMIT),
+        daemon=True
+    )
+    voice_thread.start()
 
-            samples = data[:, 0]
-            amplitude = np.max(np.abs(samples))
-
-            if amplitude > ENERGY_THRESHOLD:
-                is_speaking = True
-                silence_counter = 0
-                word_buffer.append(samples)
-            elif is_speaking:
-                word_buffer.append(samples)
-                silence_counter += 1
-
-                if silence_counter >= SILENCE_LIMIT:
-                    full_phrase_audio = np.concatenate(word_buffer)
-
-                    stream = recognizer.create_stream()
-                    stream.accept_waveform(sample_rate, full_phrase_audio)
-                    recognizer.decode_stream(stream)
-
-                    recognized_text = stream.result.text.strip()
-
-                    if recognized_text:
-                        process_command(recognized_text)
-
-                    word_buffer = []
-                    silence_counter = 0
-                    is_speaking = False
+    # Запускаем интерфейс
+    try:
+        interface.run()
+    except KeyboardInterrupt:
+        interface.quit()
 
 
 if __name__ == "__main__":
-    try:
-        main()
-    except KeyboardInterrupt:
-        print("\nОстановка.")
+    main()
