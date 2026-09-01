@@ -17,7 +17,7 @@ import pygetwindow as gw
 import psutil
 import keyboard
 import tkinter as tk
-from tkinter import scrolledtext, ttk, messagebox, Menu
+from tkinter import scrolledtext, ttk, messagebox, Menu, filedialog
 import math
 import sys
 from datetime import datetime, timedelta
@@ -32,13 +32,11 @@ try:
 except ImportError:
     HAS_YDL = False
 
-
 try:
     import vlc
     HAS_VLC = True
 except ImportError:
     HAS_VLC = False
-
 
 # ============================================================
 # ЕСТЕСТВЕННЫЙ ЖЕНСКИЙ ГОЛОС MITA (Microsoft Edge TTS)
@@ -51,19 +49,38 @@ try:
 except ImportError:
     HAS_EDGE_TTS = False
 
-# Голоса для разных языков
-TTS_VOICE_RU = "ru-RU-SvetlanaNeural"
-TTS_VOICE_UA = "uk-UA-PolinaNeural"
-TTS_VOICE_DEFAULT = TTS_VOICE_RU
+# ============================================================
+# НАСТРОЙКИ ДЛЯ COOKIES YOUTUBE
+# ============================================================
 
-TTS_RATE = "-5%"
-TTS_PITCH = "+2Hz"
-TTS_VOLUME = 1.0
-TTS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)) if "__file__" in globals() else os.getcwd(),
-                        "mita_tts.mp3")
-_tts_lock = threading.Lock()
-_tts_pygame_ready = False
-_tts_stop_requested = False
+def get_base_path():
+    if getattr(sys, 'frozen', False):
+        return os.path.dirname(sys.executable)
+    else:
+        return os.path.dirname(os.path.abspath(__file__))
+
+BASE_DIR = get_base_path()
+
+# Пути для поиска cookies
+COOKIES_DIR = os.path.join(BASE_DIR, "YouCookie")
+COOKIE_FILE = os.path.join(COOKIES_DIR, "cookie.txt")
+COOKIES_FILE = os.path.join(COOKIES_DIR, "cookies.txt")
+
+# Функция поиска cookies
+def find_cookie_file():
+    """Ищет файл cookies в папке YouCookie"""
+    if os.path.exists(COOKIE_FILE) and os.path.getsize(COOKIE_FILE) > 0:
+        return COOKIE_FILE
+    elif os.path.exists(COOKIES_FILE) and os.path.getsize(COOKIES_FILE) > 0:
+        return COOKIES_FILE
+    return None
+
+# Функция проверки наличия cookies
+def has_cookies():
+    return find_cookie_file() is not None
+
+def get_cookie_path():
+    return find_cookie_file()
 
 # ============================================================
 # ПЕРЕМЕННЫЕ ДЛЯ ВИЗУАЛИЗАЦИИ
@@ -84,14 +101,24 @@ _music_volume = 100
 # НАСТРОЙКИ ЯЗЫКА ИНТЕРФЕЙСА
 # ============================================================
 UI_LANGUAGE = "ru"
-UI_LANG_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)) if "__file__" in globals() else os.getcwd(),
-                            "mita_ui_lang.json")
+UI_LANG_FILE = os.path.join(BASE_DIR, "mita_ui_lang.json")
 
+# Голоса для разных языков
+TTS_VOICE_RU = "ru-RU-SvetlanaNeural"
+TTS_VOICE_UA = "uk-UA-PolinaNeural"
+TTS_VOICE_DEFAULT = TTS_VOICE_RU
+
+TTS_RATE = "-5%"
+TTS_PITCH = "+2Hz"
+TTS_VOLUME = 1.0
+TTS_FILE = os.path.join(BASE_DIR, "mita_tts.mp3")
+_tts_lock = threading.Lock()
+_tts_pygame_ready = False
+_tts_stop_requested = False
 
 def get_ui_language():
     global UI_LANGUAGE
     return UI_LANGUAGE
-
 
 def set_ui_language(lang: str):
     global UI_LANGUAGE
@@ -101,14 +128,12 @@ def set_ui_language(lang: str):
         return True
     return False
 
-
 def _save_ui_language():
     try:
         with open(UI_LANG_FILE, "w", encoding="utf-8") as f:
             json.dump({"language": UI_LANGUAGE}, f)
     except:
         pass
-
 
 def _load_ui_language():
     global UI_LANGUAGE
@@ -122,7 +147,6 @@ def _load_ui_language():
     except:
         pass
     UI_LANGUAGE = "ru"
-
 
 # ============================================================
 # ТЕКСТЫ ИНТЕРФЕЙСА НА ДВУХ ЯЗЫКАХ
@@ -261,12 +285,12 @@ def T(key: str) -> str:
         "move_failed": {"ru": "Не удалось переместить", "ua": "Не вдалося перемістити"},
         "window_on_monitor": {"ru": "Окно на {} мониторе", "ua": "Вікно на {} моніторі"},
         "error_text": {"ru": "❌ Ошибка: {}", "ua": "❌ Помилка: {}"},
+        "no_cookies": {"ru": "❌ Нет cookies для YouTube. Положите cookie.txt в папку YouCookie", "ua": "❌ Немає cookies для YouTube. Покладіть cookie.txt в папку YouCookie"},
     }
     result = texts.get(key, {})
     if isinstance(result, dict):
         return result.get(UI_LANGUAGE, result.get("ru", key))
     return result
-
 
 # ============================================================
 # РЕЖИМЫ РАБОТЫ МИТЫ
@@ -276,7 +300,6 @@ MODE_AI = "ai"
 MODE_ALL = "all"
 _mita_mode = MODE_ALL
 
-
 def set_mita_mode(mode: str):
     global _mita_mode
     if mode in [MODE_SYSTEM, MODE_AI, MODE_ALL]:
@@ -284,10 +307,8 @@ def set_mita_mode(mode: str):
         return True
     return False
 
-
 def get_mita_mode():
     return _mita_mode
-
 
 def get_mode_name(mode: str):
     if mode == MODE_SYSTEM:
@@ -296,7 +317,6 @@ def get_mode_name(mode: str):
         return T("mode_ai")
     else:
         return T("mode_all")
-
 
 def detect_user_language(text: str) -> str:
     if not text:
@@ -325,28 +345,23 @@ def detect_user_language(text: str) -> str:
         return "ru"
     return UI_LANGUAGE if UI_LANGUAGE in ["ru", "ua"] else "ru"
 
-
 def get_tts_voice(text: str) -> str:
     if UI_LANGUAGE == "ua":
         return TTS_VOICE_UA
     return TTS_VOICE_RU
-
 
 # ============================================================
 # НАСТРОЙКИ - ИСПРАВИТЕЛЬ ТЕКСТА
 # ============================================================
 _text_corrector_enabled = False
 
-
 def set_text_corrector(enabled: bool):
     global _text_corrector_enabled
     _text_corrector_enabled = enabled
     return _text_corrector_enabled
 
-
 def get_text_corrector():
     return _text_corrector_enabled
-
 
 def correct_text(text: str) -> str:
     if not text or len(text.strip()) < 2:
@@ -389,12 +404,10 @@ def correct_text(text: str) -> str:
                 corrected = corrected.split(prefix)[-1].strip()
         return corrected if corrected else text
     except Exception as e:
-
         return text
 
-
 # ============================================================
-# БЫСТРОЕ ВОСПРОИЗВЕДЕНИЕ МУЗЫКИ
+# ФУНКЦИИ ДЛЯ ВОСПРОИЗВЕДЕНИЯ ПЕСЕН (ИСПРАВЛЕННЫЕ)
 # ============================================================
 
 _music_thread = None
@@ -403,337 +416,301 @@ _current_music_file = None
 _vlc_instance = None
 _vlc_player = None
 _current_track_title = ""
-_music_search_cache = {}
-_music_cache_lock = threading.Lock()
 
 def set_music_volume(percent: int):
     global _music_volume, _vlc_player
-    _music_volume = max(0, min(200, int(percent)))
-    player = _vlc_player
-    if player is not None:
+    _music_volume = max(0, min(200, percent))
+    if _vlc_player is not None:
         try:
-            player.audio_set_volume(_music_volume)
-        except Exception:
+            _vlc_player.audio_set_volume(_music_volume)
+            return True
+        except:
             pass
-    return True
+    return False
 
 def get_music_volume():
+    global _music_volume
     return _music_volume
 
 def volume_up(interface=None):
-    set_music_volume(get_music_volume() + 10)
+    result = set_music_volume(get_music_volume() + 10)
     if interface:
         interface.update_volume_display()
         msg = T("volume_up").format(_music_volume)
         interface.add_chat_message("Мита", msg, is_mita=True)
         speak(msg, force=True)
-    return True
+    return result
 
 def volume_down(interface=None):
-    set_music_volume(get_music_volume() - 10)
+    result = set_music_volume(get_music_volume() - 10)
     if interface:
         interface.update_volume_display()
         msg = T("volume_down").format(_music_volume)
         interface.add_chat_message("Мита", msg, is_mita=True)
         speak(msg, force=True)
-    return True
+    return result
 
 def find_local_music(query: str) -> str:
     music_dir = os.path.join(BASE_DIR, "music")
-    try:
-        os.makedirs(music_dir, exist_ok=True)
-    except Exception:
+    if not os.path.exists(music_dir):
+        try:
+            os.makedirs(music_dir)
+        except:
+            pass
         return None
-
-    query_lower = query.lower().strip()
-    files = []
-    try:
-        files = os.listdir(music_dir)
-    except Exception:
-        return None
-
-    audio_ext = (".mp3", ".wav", ".flac", ".ogg", ".m4a")
-    for file in files:
-        if file.lower().endswith(audio_ext):
-            stem = os.path.splitext(file)[0].lower()
-            if query_lower in stem or stem in query_lower:
+    query_lower = query.lower()
+    for file in os.listdir(music_dir):
+        if file.lower().endswith(('.mp3', '.wav', '.flac', '.ogg')):
+            file_name = file.lower().replace('.mp3', '').replace('.wav', '').replace('.flac', '').replace('.ogg', '')
+            if query_lower in file_name or file_name in query_lower:
                 return os.path.join(music_dir, file)
-
-    words = [w for w in re.findall(r"[\w'-]+", query_lower) if len(w) > 2]
-    best = None
-    best_score = 0
-    for file in files:
-        if not file.lower().endswith(audio_ext):
-            continue
-        stem = os.path.splitext(file)[0].lower()
-        score = sum(1 for w in words if w in stem)
-        if score > best_score:
-            best_score = score
-            best = os.path.join(music_dir, file)
-    return best
-
-def _clean_song_query(query: str) -> str:
-    q = re.sub(r"\s+", " ", str(query or "").lower()).strip()
-    # Убираем только команды/обращения, не ломая название песни.
-    q = re.sub(
-        r"\b(?:мита|стелла|стела|міта|стелі|кепочка|пожалуйста|будь-ласка|сейчас|зараз|"
-        r"включи|включить|поставь|постав|запусти|запустить|песню|песня|пісню|пісня|"
-        r"музыку|музика|музику|трек)\b",
-        " ", q
-    )
-    return re.sub(r"\s+", " ", q).strip()
-
-def _youtube_find_fast(query: str):
-    """Минимальный сетевой путь: один результат, без playlist/retry-петель."""
-    if not HAS_YDL:
-        return None, None
-
-    clean_query = _clean_song_query(query)
-    if len(clean_query) < 2:
-        return None, None
-
-    cache_key = clean_query.casefold()
-    with _music_cache_lock:
-        cached = _music_search_cache.get(cache_key)
-    if cached:
-        return cached
-
-    opts = {
-        "quiet": True,
-        "no_warnings": True,
-        "noplaylist": True,
-        "skip_download": True,
-        "extract_flat": True,
-        "default_search": "ytsearch1",
-        "socket_timeout": 7,
-        "retries": 0,
-        "fragment_retries": 0,
-        "cachedir": False,
-    }
-
-    try:
-        with yt_dlp.YoutubeDL(opts) as ydl:
-            info = ydl.extract_info(f"ytsearch1:{clean_query}", download=False)
-        entries = info.get("entries") or []
-        entry = next((e for e in entries if e), None)
-        if not entry:
-            return None, None
-
-        video_url = entry.get("webpage_url")
-        video_id = entry.get("id")
-        if not video_url and video_id:
-            video_url = f"https://www.youtube.com/watch?v={video_id}"
-
-        title = entry.get("title") or clean_query
-        result = (video_url, title)
-        with _music_cache_lock:
-            _music_search_cache[cache_key] = result
-            # Ограничиваем память кэша.
-            if len(_music_search_cache) > 50:
-                _music_search_cache.pop(next(iter(_music_search_cache)))
-        return result
-    except Exception as e:
-        print(f"[Музыка] Быстрый поиск: {e}")
-        return None, None
-
-def _resolve_audio_url(video_url: str):
-    """Получает прямой аудиопоток без десятка повторных запросов."""
-    if not HAS_YDL or not video_url:
-        return None, None
-
-    opts = {
-        "quiet": True,
-        "no_warnings": True,
-        "noplaylist": True,
-        "skip_download": True,
-        "format": "bestaudio[ext=m4a]/bestaudio/best",
-        "socket_timeout": 8,
-        "retries": 0,
-        "fragment_retries": 0,
-        "cachedir": False,
-    }
-    try:
-        with yt_dlp.YoutubeDL(opts) as ydl:
-            info = ydl.extract_info(video_url, download=False)
-        if not info:
-            return None, None
-        return info.get("url"), info.get("title") or "Песня"
-    except Exception as e:
-        print(f"[Музыка] Получение потока: {e}")
-        return None, None
+    words = query_lower.split()
+    for file in os.listdir(music_dir):
+        if file.lower().endswith(('.mp3', '.wav', '.flac', '.ogg')):
+            file_name = file.lower().replace('.mp3', '').replace('.wav', '').replace('.flac', '').replace('.ogg', '')
+            for word in words:
+                if len(word) > 2 and word in file_name:
+                    return os.path.join(music_dir, file)
+    return None
 
 def play_youtube_audio(query: str, interface=None):
-    global _current_music_file, _current_track_title, _is_music_mode
+    global _music_thread, _music_stop, _current_music_file, _vlc_instance, _vlc_player, _current_track_title, _is_music_mode
 
     if not HAS_YDL or not HAS_VLC:
-        print("[Музыка] Нужны yt-dlp и python-vlc.")
+        if interface:
+            interface.add_chat_message("Мита", "❌ Нет yt-dlp или VLC", is_mita=True)
         return False
 
-    clean_query = _clean_song_query(query)
-    if len(clean_query) < 2:
+    # Проверяем наличие cookies
+    cookie_path = get_cookie_path()
+    if not cookie_path:
+        msg = T("no_cookies")
+        if interface:
+            interface.add_chat_message("Мита", msg, is_mita=True)
+            speak("Положите файл cookie.txt в папку YouCookie", force=True)
         return False
 
     try:
-        # 1) Локальная песня запускается практически мгновенно.
-        local_file = find_local_music(clean_query)
-        if local_file:
-            title = os.path.basename(local_file)
-            _current_music_file = local_file
-            _current_track_title = title
+        _music_stop = False
+        _current_track_title = ""
+
+        # Очищаем запрос от триггерных слов
+        clean_query = query
+        for tw in ["мита", "стелла", "кепочка", "стелам", "стеллу", "міта", "стела", "включи", "поставь", "песню"]:
+            clean_query = clean_query.replace(tw, '').strip()
+        if not clean_query or len(clean_query) < 2:
+            return False
+
+        # Проверяем локальную музыку
+        music_file = find_local_music(clean_query)
+        if music_file:
+            _current_track_title = os.path.basename(music_file)
             if interface:
-                interface.root.after(0, lambda: interface.update_music_button(True))
-                interface.root.after(0, lambda: interface.set_music_track(title))
-            return _play_audio_vlc(local_file, title, interface)
+                interface.update_music_button(True)
+            return _play_audio_vlc(music_file, _current_track_title, interface)
 
-        # 2) Один быстрый результат YouTube вместо ytsearch10 + перебора.
-        print(f"[Музыка] Быстрый поиск: {clean_query}")
-        video_url, title = _youtube_find_fast(clean_query)
-        if not video_url:
-            return False
+        # Ищем на YouTube с улучшенными настройками
+        print(f"[Музыка] Ищу: {clean_query}")
+        print(f"[Музыка] Использую cookies: {cookie_path}")
 
-        # Сразу показываем найденное название, пока резолвится поток.
-        if interface:
-            interface.root.after(0, lambda t=title: interface.set_music_track(t, loading=True))
+        ydl_opts = {
+            'format': 'bestaudio[ext=m4a]/bestaudio/best',  # Указываем конкретный формат
+            'quiet': True,
+            'no_warnings': True,
+            'default_search': 'ytsearch10',
+            'extract_flat': False,
+            'noplaylist': True,
+            'skip_download': True,
+            'socket_timeout': 30,
+            'retries': 10,
+            'fragment_retries': 10,
+            'ignoreerrors': True,
+            'cachedir': False,
+            'geo_bypass': True,
+            'geo_bypass_country': 'US',
+            'cookiefile': cookie_path,
+            'extractor_args': {
+                'youtube': {
+                    'player_client': ['android', 'web'],
+                    'player_skip': ['webpage'],
+                    'skip_dash': False,
+                }
+            }
+        }
+        audio_url = None
+        title = None
 
-        audio_url, resolved_title = _resolve_audio_url(video_url)
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            try:
+                info = ydl.extract_info(f"ytsearch10:{clean_query}", download=False)
+                entries = info.get('entries', []) if 'entries' in info else []
+
+                for entry in entries:
+                    if not entry:
+                        continue
+                    try:
+                        test_url = entry.get('url') or entry.get('webpage_url')
+                        if test_url:
+                            audio_url = test_url
+                            title = entry.get('title', 'Песня')
+                            print(f"[Музыка] Нашел: {title}")
+                            break
+                    except:
+                        continue
+
+                if not audio_url:
+                    for entry in entries:
+                        if not entry:
+                            continue
+                        try:
+                            video_id = entry.get('id')
+                            if video_id:
+                                alt_url = f"https://www.youtube.com/watch?v={video_id}"
+                                audio_url = alt_url
+                                title = entry.get('title', 'Песня')
+                                print(f"[Музыка] Нашел: {title}")
+                                break
+                        except:
+                            continue
+
+                if not audio_url:
+                    words = clean_query.split()
+                    if len(words) > 3:
+                        short_query = ' '.join(words[:3])
+                        info = ydl.extract_info(f"ytsearch5:{short_query}", download=False)
+                        entries = info.get('entries', []) if 'entries' in info else []
+                        for entry in entries:
+                            if entry and entry.get('url'):
+                                audio_url = entry.get('url')
+                                title = entry.get('title', 'Песня')
+                                break
+
+            except Exception as e:
+                print(f"[Музыка] Ошибка поиска: {e}")
+                if "Sign in to confirm" in str(e) or "cookies" in str(e).lower():
+                    if interface:
+                        msg = "⚠️ Нужно обновить cookies для YouTube. Положите свежий cookie.txt в папку YouCookie"
+                        interface.add_chat_message("Мита", msg, is_mita=True)
+                        speak(msg, force=True)
+                return False
+
         if not audio_url:
+            print("[Музыка] Не удалось найти песню")
             return False
 
-        _current_track_title = resolved_title or title or "Песня"
+        _current_track_title = title or "Песня"
         if interface:
-            interface.root.after(
-                0,
-                lambda t=_current_track_title: (
-                    interface.update_music_button(True),
-                    interface.set_music_track(t)
-                )
-            )
+            interface.update_music_button(True)
+            interface.add_chat_message("Мита", f"🎵 Играет: {_current_track_title}", is_mita=True)
 
         return _play_audio_vlc(audio_url, _current_track_title, interface)
+
     except Exception as e:
         print(f"[Ошибка музыки]: {e}")
         return False
 
 def _play_audio_vlc(audio_url: str, title: str, interface=None):
-    global _music_thread, _music_stop, _vlc_instance, _vlc_player
-    global _is_music_mode, _music_intensity
+    global _music_thread, _music_stop, _vlc_instance, _vlc_player, _is_music_mode, _music_volume
 
     try:
-        _music_stop = True
-        old_player = _vlc_player
-        if old_player is not None:
-            try:
-                old_player.stop()
-                old_player.release()
-            except Exception:
-                pass
-        _vlc_player = None
         _music_stop = False
         _is_music_mode = True
 
         if _vlc_instance is None:
-            _vlc_instance = vlc.Instance(
-                "--quiet",
-                "--no-video",
-                "--network-caching=350"
-            )
+            _vlc_instance = vlc.Instance('--quiet', '--no-video', '--network-caching=2000')
 
-        player = _vlc_instance.media_player_new()
+        _vlc_player = _vlc_instance.media_player_new()
         media = _vlc_instance.media_new(audio_url)
-        media.add_option(":no-video")
-        media.add_option(":network-caching=350")
-        media.add_option(":http-caching=300")
-        media.add_option(":file-caching=300")
-        player.set_media(media)
-        player.audio_set_volume(_music_volume)
-        _vlc_player = player
+        media.add_option(':no-video')
+        media.add_option(':network-caching=2000')
+        media.add_option(':http-caching=1000')
+        media.add_option(':file-caching=500')
+        _vlc_player.set_media(media)
+        _vlc_player.audio_set_volume(_music_volume)
 
-        if player.play() == -1:
-            raise RuntimeError("VLC не смог открыть аудиопоток")
+        if _vlc_player.play() == -1:
+            raise Exception("VLC не смог открыть аудиопоток")
 
-        def monitor(local_player):
+        def monitor():
             global _music_stop, _vlc_player, _is_music_mode, _music_intensity
-            deadline = time.time() + 15
             started = False
+            deadline = time.time() + 60
 
             while not _music_stop:
+                player = _vlc_player
+                if player is None:
+                    break
                 try:
-                    state = local_player.get_state()
+                    state = player.get_state()
                 except Exception:
                     break
 
                 if state in (vlc.State.Playing, vlc.State.Paused):
                     started = True
-                    _music_intensity = 0.8
-                elif started and state in (
-                    vlc.State.Ended, vlc.State.Stopped, vlc.State.Error
-                ):
+                    _music_intensity = 0.7 + random.random() * 0.3
+                elif started and state in (vlc.State.Ended, vlc.State.Stopped, vlc.State.Error):
                     break
                 elif not started and time.time() > deadline:
+                    try:
+                        player.stop()
+                        player.play()
+                    except:
+                        pass
                     break
-                time.sleep(0.08)
+                time.sleep(0.1)
 
             try:
-                local_player.stop()
-                local_player.release()
+                if _vlc_player is not None:
+                    _vlc_player.stop()
+                    _vlc_player.release()
             except Exception:
                 pass
+            _vlc_player = None
+            _is_music_mode = False
+            _music_intensity = 0.0
 
-            if _vlc_player is local_player:
-                _vlc_player = None
-                _is_music_mode = False
-                _music_intensity = 0.0
-                if interface:
-                    try:
-                        interface.root.after(0, lambda: interface.update_music_button(False))
-                    except Exception:
-                        pass
+            if interface:
+                interface.update_music_button(False)
+                interface.update_volume_display()
+            _music_stop = False
 
-        _music_thread = threading.Thread(
-            target=monitor, args=(player,), daemon=True
-        )
+        _music_thread = threading.Thread(target=monitor, daemon=True)
         _music_thread.start()
         return True
 
     except Exception as e:
-        _is_music_mode = False
-        _music_intensity = 0.0
         print(f"[Ошибка VLC]: {e}")
         return False
 
 def stop_music():
     global _music_stop, _vlc_player, _is_music_mode, _music_intensity
     _music_stop = True
-    player = _vlc_player
-    _vlc_player = None
     _is_music_mode = False
     _music_intensity = 0.0
-    if player is not None:
-        try:
-            player.stop()
-            player.release()
-        except Exception:
-            pass
+    try:
+        if _vlc_player is not None:
+            _vlc_player.stop()
+            _vlc_player.release()
+    except Exception:
+        pass
+    _vlc_player = None
     return True
 
 def is_music_playing():
-    player = _vlc_player
-    if player is None or not HAS_VLC:
-        return False
     try:
-        return player.get_state() == vlc.State.Playing
+        return _vlc_player is not None and _vlc_player.get_state() == vlc.State.Playing
     except Exception:
         return False
 
 def process_music_command(text: str, interface) -> bool:
-    cleaned = re.sub(r"\s+", " ", text.lower()).strip()
+    global _music_volume
+    cleaned = text.lower().strip()
 
-    stop_phrases = [
-        "стоп музыка", "выключи музыку", "останови музыку",
-        "хватит музыки", "прекрати музыку",
-        "стоп музика", "вимкни музику", "зупини музику",
-        "досить музики", "припини музику"
-    ]
+    # Стоп музыка
+    stop_phrases_ru = ['стоп музыка', 'выключи музыку', 'останови музыку', 'хватит музыки', 'прекрати музыку']
+    stop_phrases_ua = ['стоп музика', 'вимкни музику', 'зупини музику', 'досить музики', 'припини музику']
+    stop_phrases = stop_phrases_ru + stop_phrases_ua
+
     if any(p in cleaned for p in stop_phrases):
         stop_music()
         msg = T("music_stopped")
@@ -742,38 +719,44 @@ def process_music_command(text: str, interface) -> bool:
         speak(msg, force=True)
         return True
 
-    if "громкост" in cleaned or "гучн" in cleaned:
-        vol_match = re.search(r"(\d{1,3})\s*%?", cleaned)
+    # Регулировка громкости
+    if 'громкост' in cleaned or 'гучн' in cleaned:
+        vol_match = re.search(r'(\d{1,3})%?', cleaned)
         if vol_match:
-            vol = max(0, min(200, int(vol_match.group(1))))
-            set_music_volume(vol)
-            interface.update_volume_display()
-            msg = T("volume_text").format(_music_volume)
-            interface.add_chat_message("Мита", msg, is_mita=True)
-            speak(msg, force=True)
-            return True
-        if "громче" in cleaned or "гучніше" in cleaned:
+            vol = int(vol_match.group(1))
+            if 0 <= vol <= 200:
+                set_music_volume(vol)
+                interface.update_volume_display()
+                msg = T("volume_up").format(_music_volume)
+                interface.add_chat_message("Мита", msg, is_mita=True)
+                speak(msg, force=True)
+                return True
+
+        if 'громче' in cleaned or 'гучніше' in cleaned:
             volume_up(interface)
             return True
-        if "тише" in cleaned or "тихіше" in cleaned:
+        elif 'тише' in cleaned or 'тихіше' in cleaned:
             volume_down(interface)
             return True
 
-    music_words = ["песн", "музык", "трек", "пісн", "музик"]
-    if any(w in cleaned for w in music_words):
-        song_name = _clean_song_query(cleaned)
-        if len(song_name) > 1:
-            interface.add_chat_message(
-                "Мита",
-                f"🎵 {T('music_playing')}{song_name}",
-                is_mita=True
-            )
-            # Поиск полностью в фоне — UI и голос не блокируются.
-            threading.Thread(
-                target=play_youtube_audio,
-                args=(song_name, interface),
-                daemon=True
-            ).start()
+    # Включение песни
+    if any(kw in cleaned for kw in ['песн', 'музык', 'трек', 'пісн']):
+        song_name = None
+        keywords_ru = ['песню', 'песня', 'песни', 'музыку', 'музыка', 'трек', 'включи', 'поставь']
+        keywords_ua = ['пісню', 'пісня', 'пісні', 'музику', 'музика', 'включи', 'постав']
+
+        for keyword in keywords_ru + keywords_ua:
+            if keyword in cleaned:
+                parts = cleaned.split(keyword, 1)
+                if len(parts) > 1:
+                    song_name = parts[1].strip()
+                    for word in ['мита', 'стелла', 'пожалуйста', 'сейчас', 'міта', 'будь-ласка', 'зараз']:
+                        song_name = song_name.replace(word, '').strip()
+                    break
+
+        if song_name and len(song_name) > 2:
+            interface.add_chat_message("Мита", f"🎵 Ищу: {song_name}", is_mita=True)
+            threading.Thread(target=play_youtube_audio, args=(song_name, interface), daemon=True).start()
             return True
 
     return False
@@ -887,7 +870,6 @@ def speak(text: str, force: bool = False):
     threading.Thread(target=worker, daemon=True).start()
     return True
 
-
 def stop_tts():
     global _tts_stop_requested
     _tts_stop_requested = True
@@ -899,16 +881,16 @@ def stop_tts():
         pass
     return False
 
-
 # ============================================================
 # GROQ API
 # ============================================================
 
-GROQ_API_KEY = "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"
-client = Groq(api_key=GROQ_API_KEY)
-
+GROQ_API_KEY = os.getenv("GROQ_API_KEY", "").strip()
+client = Groq(api_key=GROQ_API_KEY) if GROQ_API_KEY else None
 
 def ask_groq(question):
+    if client is None:
+        return "⚠️ Groq API ключ не настроен. Добавьте переменную окружения GROQ_API_KEY."
     try:
         ui_lang = UI_LANGUAGE
         lang_text = "українською" if ui_lang == "ua" else "русском"
@@ -932,8 +914,9 @@ def ask_groq(question):
     except Exception as e:
         return T("error_text").format(e)
 
-
 def ask_groq_chat(question, chat_history=None):
+    if client is None:
+        return "⚠️ Groq API ключ не настроен. Добавьте переменную окружения GROQ_API_KEY."
     try:
         ui_lang = UI_LANGUAGE
         lang_text = "українською" if ui_lang == "ua" else "русском"
@@ -959,19 +942,10 @@ def ask_groq_chat(question, chat_history=None):
     except Exception as e:
         return T("error_text").format(e)
 
-
 # ============================================================
 # КЛЮЧИ И АВТОРИЗАЦИЯ
 # ============================================================
 
-def get_base_path():
-    if getattr(sys, 'frozen', False):
-        return os.path.dirname(sys.executable)
-    else:
-        return os.path.dirname(os.path.abspath(__file__))
-
-
-BASE_DIR = get_base_path()
 SOUNDS_DIR = os.path.join(BASE_DIR, "sounds")
 JSON_CACHE_FILE = os.path.join(BASE_DIR, "saveAppPty.json")
 
@@ -985,7 +959,6 @@ KEY_TABLE = {
     "STELLA-1WEEK": {"seconds": 604800, "created_at": "2026-08-30 12:00:00"},
 }
 
-
 def _load_json_file(path):
     try:
         if os.path.exists(path):
@@ -995,7 +968,6 @@ def _load_json_file(path):
         pass
     return {}
 
-
 def _save_json_file(path, data):
     try:
         with open(path, "w", encoding="utf-8") as f:
@@ -1003,7 +975,6 @@ def _save_json_file(path, data):
         return True
     except Exception:
         return False
-
 
 def _remaining_text(seconds):
     seconds = max(0, int(seconds))
@@ -1014,7 +985,6 @@ def _remaining_text(seconds):
     if h: return f"{h}ч {m}м"
     if m: return f"{m}м {s}с"
     return f"{s}с"
-
 
 def _build_key_db():
     db = _load_json_file(KEY_DB_FILE)
@@ -1034,7 +1004,6 @@ def _build_key_db():
         _save_json_file(KEY_DB_FILE, db)
     return db
 
-
 def _get_saved_key():
     saved = _load_json_file(ACTIVATED_KEY_FILE)
     key = str(saved.get("key", "")).strip().upper()
@@ -1046,10 +1015,8 @@ def _get_saved_key():
         return None
     return key
 
-
 def _remember_key(key):
     _save_json_file(ACTIVATED_KEY_FILE, {"key": key, "saved_at": time.time()})
-
 
 def _clear_saved_key():
     if os.path.exists(ACTIVATED_KEY_FILE):
@@ -1059,7 +1026,6 @@ def _clear_saved_key():
         except:
             pass
     return False
-
 
 def validate_stella_key(key):
     key = key.strip().upper()
@@ -1076,7 +1042,6 @@ def validate_stella_key(key):
     _save_json_file(KEY_DB_FILE, db)
     _remember_key(key)
     return True, f"Ключ принят • осталось {_remaining_text(remaining)}"
-
 
 # ============================================================
 # ОКНО ВЫБОРА РЕЖИМА ПРИ ЗАПУСКЕ
@@ -1205,7 +1170,6 @@ class ModeSelectionWindow:
         self.root.mainloop()
         return self.result
 
-
 def get_saved_mode():
     try:
         pref_file = os.path.join(BASE_DIR, "mita_mode_pref.json")
@@ -1217,7 +1181,6 @@ def get_saved_mode():
     except:
         pass
     return None
-
 
 # ============================================================
 # КЛАСС КЛЮЧЕВОГО ОКНА
@@ -1285,13 +1248,11 @@ class KeyLoginWindow:
         self.root.mainloop()
         return self.result
 
-
 def require_stella_key(parent=None):
     _build_key_db()
     if _get_saved_key():
         return True
     return KeyLoginWindow(parent).show()
-
 
 # ============================================================
 # СИСТЕМНЫЙ АУДИО МОНИТОР
@@ -1372,43 +1333,34 @@ class SystemAudioMonitor:
         except Exception as e:
             print(f"[Audio Fallback Error]: {e}")
 
-
 # ============================================================
 # ОСНОВНОЙ ИНТЕРФЕЙС
 # ============================================================
 
 class MisideInterface:
-    W, H = 1280, 780
+    """Modern MITA / MISIDE inspired interface.
+    Logic and voice/music back-end remain compatible with the original script.
+    """
+
+    W, H = 1280, 820
 
     def __init__(self):
         self.root = tk.Tk()
         self.root.title(T("app_title"))
         self.root.geometry(f"{self.W}x{self.H}")
-        self.root.minsize(1080, 680)
-        self.root.configure(bg="#070911")
+        self.root.minsize(1080, 700)
+        self.root.configure(bg="#08090d")
         self.root.resizable(True, True)
 
         self.running = True
         self.is_listening = False
         self.is_processing = False
         self.is_manual_recording = False
-        self.is_dragging = False
-        self.drag_x = self.drag_y = 0
-
-        self.chat_history = []
-        self.message_tags = []
         self.manual_audio_buffer = []
         self.manual_recording_thread = None
-
-        self.tts_mute_button = None
-        self.tts_muted = False
-        self.corrector_button = None
-        self.corrector_enabled = False
-        self.lang_button = None
-        self.mode_label = None
-        self.volume_scale = None
-        self.music_stop_button = None
-        self.volume_label_id = None
+        self.chat_history = []
+        self.message_tags = []
+        self.current_tab = 0
 
         self.heart_beat_strength = 0.0
         self.heart_beat_target = 0.0
@@ -1419,782 +1371,778 @@ class MisideInterface:
 
         self.music_mode = False
         self.music_intensity = 0.0
-        self.music_track = "Ничего не играет"
+        self.music_particles = []
+
+        self.tts_muted = False
+        self.corrector_enabled = _text_corrector_enabled
+
+        self.drag_x = 0
+        self.drag_y = 0
+        self.is_dragging = False
+        self._toast_after = None
 
         self.colors = {
-            "bg": "#070911",
-            "bg2": "#0b0f1b",
-            "panel": "#0d1220",
-            "panel2": "#11182a",
-            "line": "#1d2a42",
-            "primary": "#7c5cff",
-            "primary2": "#b69cff",
-            "cyan": "#35d9ff",
-            "pink": "#ff65b5",
-            "green": "#49e6a2",
-            "red": "#ff5577",
-            "text": "#f4f7ff",
-            "muted": "#8792aa",
-            "dim": "#4e5a73",
+            "bg": "#08090d",
+            "bg2": "#0c0e14",
+            "panel": "#11131b",
+            "panel2": "#161925",
+            "panel3": "#1b1e2b",
+            "line": "#282d3c",
+            "line2": "#34394a",
+            "primary": "#ff5aa8",
+            "primary2": "#ff8bc4",
+            "purple": "#9b7bff",
+            "cyan": "#69d7ff",
+            "green": "#55e69a",
+            "danger": "#ff5f78",
+            "text": "#f7f3f8",
+            "muted": "#949aaa",
+            "dim": "#626878",
+            "chat_bg": "#0b0d13",
+            "user": "#262033",
+            "mita": "#191622",
         }
 
-        self.root.bind("<Button-1>", self.start_move)
-        self.root.bind("<B1-Motion>", self.on_move)
-        self.root.bind("<ButtonRelease-1>", self.stop_move)
         self.root.protocol("WM_DELETE_WINDOW", self.quit)
-
         self.setup_ui()
-        self.root.after(30, self.fade_in)
+        self.root.after(50, self.fade_in)
+
         self.audio_monitor = SystemAudioMonitor(self)
         self.audio_monitor.start()
         self.animate()
 
-    def start_move(self, event):
-        if event.widget in {
-            getattr(self, "chat_display", None),
-            getattr(self, "chat_input", None),
-            getattr(self, "volume_scale", None),
-            getattr(self, "music_stop_button", None),
-            getattr(self, "manual_record_button", None),
-            getattr(self, "tts_mute_button", None),
-            getattr(self, "corrector_button", None),
-            getattr(self, "lang_button", None),
-            getattr(self, "mode_button", None),
-        }:
-            self.is_dragging = False
-            return
-        self.is_dragging = True
-        self.drag_x = event.x_root
-        self.drag_y = event.y_root
+    # -------------------- visual helpers --------------------
 
-    def on_move(self, event):
-        if not self.is_dragging:
-            return
-        dx = event.x_root - self.drag_x
-        dy = event.y_root - self.drag_y
-        self.root.geometry(
-            f"+{self.root.winfo_x() + dx}+{self.root.winfo_y() + dy}"
-        )
-        self.drag_x = event.x_root
-        self.drag_y = event.y_root
-
-    def stop_move(self, event):
-        self.is_dragging = False
-
-    def rounded_rect(self, x1, y1, x2, y2, r=18, fill=None, outline=None, width=1):
+    def rounded_rect(self, canvas, x1, y1, x2, y2, r=18, fill=None,
+                     outline=None, width=1, tags=None):
+        r = min(r, abs(x2-x1)/2, abs(y2-y1)/2)
         pts = [
-            x1+r,y1, x2-r,y1, x2,y1+r,
-            x2,y2-r, x2-r,y2, x1+r,y2,
-            x1,y2-r, x1,y1+r
+            x1+r,y1, x2-r,y1, x2,y1+r, x2,y2-r,
+            x2-r,y2, x1+r,y2, x1,y2-r, x1,y1+r
         ]
-        return self.canvas.create_polygon(
+        return canvas.create_polygon(
             pts, smooth=True, splinesteps=16,
-            fill=fill or "", outline=outline or "", width=width
+            fill=fill or "", outline=outline or "", width=width, tags=tags
         )
+
+    def _label(self, parent, text, size=10, weight="normal", color=None, **kw):
+        return tk.Label(
+            parent, text=text, font=("Segoe UI", size, weight),
+            bg=parent.cget("bg"), fg=color or self.colors["text"],
+            **kw
+        )
+
+    def _button(self, parent, text, command, accent=False, danger=False, width=None):
+        bg = self.colors["primary"] if accent else (
+            self.colors["danger"] if danger else self.colors["panel3"]
+        )
+        fg = "#ffffff" if accent or danger else self.colors["text"]
+        btn = tk.Button(
+            parent, text=text, command=command,
+            font=("Segoe UI", 9, "bold"),
+            bg=bg, fg=fg, activebackground=self.colors["primary2"],
+            activeforeground="#ffffff", relief="flat", bd=0,
+            cursor="hand2", padx=12, pady=7,
+            highlightthickness=0
+        )
+        if width:
+            btn.config(width=width)
+        return btn
+
+    def _card(self, parent, title=None, subtitle=None):
+        frame = tk.Frame(
+            parent, bg=self.colors["panel"],
+            highlightbackground=self.colors["line"],
+            highlightthickness=1
+        )
+        if title:
+            head = tk.Frame(frame, bg=self.colors["panel"])
+            head.pack(fill="x", padx=18, pady=(15, 0))
+            tk.Label(head, text=title, font=("Segoe UI", 10, "bold"),
+                     bg=self.colors["panel"], fg=self.colors["text"]).pack(side="left")
+            if subtitle:
+                tk.Label(head, text=subtitle, font=("Segoe UI", 8),
+                         bg=self.colors["panel"], fg=self.colors["muted"]).pack(side="right")
+        return frame
+
+    def _bind_hover(self, widget, normal, hover):
+        widget.bind("<Enter>", lambda e: widget.config(bg=hover))
+        widget.bind("<Leave>", lambda e: widget.config(bg=normal))
+
+    def _make_nav(self, parent, key, icon, idx):
+        row = tk.Frame(parent, bg=self.colors["panel"], height=42, cursor="hand2")
+        row.pack(fill="x", padx=12, pady=3)
+        icon_lbl = tk.Label(row, text=icon, font=("Segoe UI Symbol", 14),
+                            bg=self.colors["panel"], fg=self.colors["muted"])
+        icon_lbl.pack(side="left", padx=(12, 8))
+        text_lbl = tk.Label(row, text=key, font=("Segoe UI", 9, "bold"),
+                            bg=self.colors["panel"], fg=self.colors["muted"])
+        text_lbl.pack(side="left")
+        for w in (row, icon_lbl, text_lbl):
+            w.bind("<Button-1>", lambda e, i=idx: self.switch_tab(i))
+        self.nav_items.append((row, icon_lbl, text_lbl))
+        return row
+
+    # -------------------- setup --------------------
 
     def setup_ui(self):
-        self.canvas = tk.Canvas(
-            self.root, bg=self.colors["bg"], highlightthickness=0, bd=0
-        )
-        self.canvas.pack(fill=tk.BOTH, expand=True)
+        self.canvas = tk.Canvas(self.root, bg=self.colors["bg"], highlightthickness=0, bd=0)
+        self.canvas.pack(fill="both", expand=True)
+
         self.create_background()
 
-        # Верхняя панель
-        self.rounded_rect(
-            18, 16, self.W-18, 76, 20,
-            self.colors["panel"], self.colors["line"]
-        )
-        self.canvas.create_text(
-            42, 46, text="✦", font=("Arial", 22, "bold"),
-            fill=self.colors["cyan"], anchor="w"
-        )
-        self.canvas.create_text(
-            75, 38, text="MITA", font=("Arial", 18, "bold"),
-            fill=self.colors["text"], anchor="w"
-        )
-        self.canvas.create_text(
-            75, 58, text="VOICE INTELLIGENCE  /  ONLINE",
-            font=("Arial", 7, "bold"), fill=self.colors["muted"], anchor="w"
-        )
+        # Header
+        self.header = tk.Frame(self.root, bg=self.colors["panel"],
+                               highlightbackground=self.colors["line"], highlightthickness=1)
+        self.header.place(x=18, y=16, relwidth=0.972, height=68)
 
-        self.online_dot = self.canvas.create_oval(
-            self.W-165, 37, self.W-153, 49,
-            fill=self.colors["green"], outline=""
-        )
-        self.canvas.create_text(
-            self.W-143, 43, text="SYSTEM READY",
-            font=("Arial", 8, "bold"), fill=self.colors["green"], anchor="w"
-        )
+        brand = tk.Frame(self.header, bg=self.colors["panel"])
+        brand.pack(side="left", padx=18)
+        tk.Label(brand, text="♥", font=("Segoe UI", 19, "bold"),
+                 bg=self.colors["panel"], fg=self.colors["primary2"]).pack(side="left", padx=(0, 9))
+        btext = tk.Frame(brand, bg=self.colors["panel"])
+        btext.pack(side="left")
+        tk.Label(btext, text="MITA", font=("Segoe UI", 18, "bold"),
+                 bg=self.colors["panel"], fg=self.colors["text"]).pack(anchor="w")
+        tk.Label(btext, text="PERSONAL AI • VOICE CORE",
+                 font=("Segoe UI", 7, "bold"), bg=self.colors["panel"],
+                 fg=self.colors["muted"]).pack(anchor="w")
 
-        # Левая панель
-        self.rounded_rect(
-            18, 92, 290, self.H-18, 22,
-            self.colors["panel"], self.colors["line"]
+        self.header_status = tk.Label(
+            self.header, text="●  ONLINE", font=("Segoe UI", 8, "bold"),
+            bg="#12231d", fg=self.colors["green"], padx=12, pady=5
         )
-        self.canvas.create_text(
-            42, 120, text="CONTROL DECK",
-            font=("Arial", 8, "bold"), fill=self.colors["dim"], anchor="w"
+        self.header_status.pack(side="right", padx=18)
+
+        self.header_clock = tk.Label(self.header, text="",
+                                     font=("Segoe UI", 9, "bold"),
+                                     bg=self.colors["panel"], fg=self.colors["muted"])
+        self.header_clock.pack(side="right", padx=15)
+
+        # Body
+        self.body = tk.Frame(self.root, bg=self.colors["bg"])
+        self.body.place(x=18, y=96, relwidth=0.972, relheight=0.865)
+
+        self.sidebar = tk.Frame(
+            self.body, bg=self.colors["panel"],
+            highlightbackground=self.colors["line"], highlightthickness=1
         )
+        self.sidebar.pack(side="left", fill="y", padx=(0, 12))
+        self.sidebar.config(width=225)
+        self.sidebar.pack_propagate(False)
+
+        self.content = tk.Frame(self.body, bg=self.colors["bg2"],
+                                highlightbackground=self.colors["line"],
+                                highlightthickness=1)
+        self.content.pack(side="left", fill="both", expand=True)
+
+        self.build_sidebar()
+        self.build_content()
+
+        self.create_particles()
+        self.create_stars()
+        self.create_floating_stars()
+        self.update_key_info()
+        self.switch_tab(0)
+
+    def build_sidebar(self):
+        top = tk.Frame(self.sidebar, bg=self.colors["panel"])
+        top.pack(fill="x", padx=15, pady=(20, 12))
+        tk.Label(top, text="CONTROL CENTER", font=("Segoe UI", 8, "bold"),
+                 bg=self.colors["panel"], fg=self.colors["dim"]).pack(anchor="w")
+        tk.Label(top, text="Управление MITA", font=("Segoe UI", 13, "bold"),
+                 bg=self.colors["panel"], fg=self.colors["text"]).pack(anchor="w", pady=(4,0))
 
         self.nav_items = []
-        for i, (icon, label) in enumerate([
-            ("⌂", T("nav_main")),
-            ("◈", T("nav_chat")),
-            ("⌘", T("nav_commands")),
-            ("⚙", T("nav_settings")),
-        ]):
-            y = 153 + i*43
-            bg = self.rounded_rect(
-                34, y-17, 274, y+18, 11,
-                self.colors["panel2"] if i == 0 else "",
-                self.colors["line"] if i == 0 else ""
-            )
-            txt = self.canvas.create_text(
-                52, y, text=f"{icon}   {label}",
-                font=("Arial", 9, "bold"),
-                fill=self.colors["text"] if i == 0 else self.colors["muted"],
-                anchor="w"
-            )
-            self.nav_items.append((bg, txt))
-            self.canvas.tag_bind(bg, "<Button-1>", lambda e, n=i: self.switch_tab(n))
-            self.canvas.tag_bind(txt, "<Button-1>", lambda e, n=i: self.switch_tab(n))
+        self._make_nav(self.sidebar, T("nav_main"), "⌂", 0)
+        self._make_nav(self.sidebar, T("nav_chat"), "◉", 1)
+        self._make_nav(self.sidebar, T("nav_commands"), "⌘", 2)
+        self._make_nav(self.sidebar, T("nav_settings"), "⚙", 3)
 
-        # Статус движка
-        self.rounded_rect(34, 340, 274, 410, 14, self.colors["panel2"], self.colors["line"])
-        self.canvas.create_text(
-            50, 358, text="VOICE ENGINE",
-            font=("Arial", 7, "bold"), fill=self.colors["dim"], anchor="w"
-        )
-        self.engine_dot = self.canvas.create_oval(
-            50, 377, 58, 385, fill=self.colors["cyan"], outline=""
-        )
-        self.canvas.create_text(
-            50, 399, text="RU / UA • ",
-            font=("Arial", 7), fill=self.colors["muted"], anchor="w"
-        )
+        sep = tk.Frame(self.sidebar, bg=self.colors["line"], height=1)
+        sep.pack(fill="x", padx=15, pady=16)
 
-        # Режим
-        self.rounded_rect(34, 422, 274, 482, 14, self.colors["panel2"], self.colors["line"])
-        self.canvas.create_text(
-            50, 440, text=T("mode"),
-            font=("Arial", 7, "bold"), fill=self.colors["dim"], anchor="w"
-        )
-        self.mode_label = self.canvas.create_text(
-            50, 460, text=get_mode_name(_mita_mode),
-            font=("Arial", 8, "bold"), fill=self.colors["primary2"], anchor="w"
-        )
-        self.mode_button = tk.Button(
-            self.root, text=T("change_mode"), command=self.change_mode,
-            font=("Arial", 8, "bold"), bg=self.colors["panel2"],
-            fg=self.colors["muted"], activebackground=self.colors["primary"],
-            activeforeground="white", relief="flat", bd=0, cursor="hand2"
-        )
-        self.mode_button.place(x=50, y=475, width=210, height=25)
+        # Engine
+        engine = tk.Frame(self.sidebar, bg=self.colors["panel"])
+        engine.pack(fill="x", padx=15)
+        tk.Label(engine, text="VOICE ENGINE", font=("Segoe UI", 8, "bold"),
+                 bg=self.colors["panel"], fg=self.colors["dim"]).pack(anchor="w")
+        self.engine_status = tk.Label(engine, text="●  MITA CORE ONLINE",
+                                      font=("Segoe UI", 9, "bold"),
+                                      bg=self.colors["panel"], fg=self.colors["green"])
+        self.engine_status.pack(anchor="w", pady=(7, 0))
 
-        # Голос
-        self.tts_mute_button = tk.Button(
-            self.root, text=T("voice_on"), command=self.toggle_tts_mute,
-            font=("Arial", 8, "bold"), bg=self.colors["panel2"],
-            fg=self.colors["green"], activebackground=self.colors["panel2"],
-            relief="flat", bd=0, cursor="hand2"
-        )
-        self.tts_mute_button.place(x=50, y=518, width=210, height=28)
+        # Hotword card
+        hot = self._card(self.sidebar)
+        hot.pack(fill="x", padx=12, pady=(15, 7))
+        tk.Label(hot, text="HOTWORD", font=("Segoe UI", 8, "bold"),
+                 bg=self.colors["panel"], fg=self.colors["dim"]).pack(anchor="w", padx=12, pady=(12,2))
+        tk.Label(hot, text="«Стелла»  •  «Мита»", font=("Segoe UI", 9, "bold"),
+                 bg=self.colors["panel"], fg=self.colors["text"]).pack(anchor="w", padx=12)
+        tk.Label(hot, text="Голосовое пробуждение активно",
+                 font=("Segoe UI", 7), bg=self.colors["panel"],
+                 fg=self.colors["muted"]).pack(anchor="w", padx=12, pady=(2,12))
 
-        # Исправитель
-        self.corrector_button = tk.Button(
-            self.root, text=T("corrector_off"), command=self.toggle_corrector,
-            font=("Arial", 8, "bold"), bg=self.colors["panel2"],
-            fg=self.colors["muted"], activebackground=self.colors["panel2"],
-            relief="flat", bd=0, cursor="hand2"
-        )
-        self.corrector_button.place(x=50, y=551, width=210, height=28)
+        # Mode
+        mode = self._card(self.sidebar)
+        mode.pack(fill="x", padx=12, pady=7)
+        tk.Label(mode, text=T("mode"), font=("Segoe UI", 8, "bold"),
+                 bg=self.colors["panel"], fg=self.colors["dim"]).pack(anchor="w", padx=12, pady=(11,2))
+        self.mode_label = tk.Label(mode, text=get_mode_name(_mita_mode),
+                                   font=("Segoe UI", 9, "bold"),
+                                   bg=self.colors["panel"], fg=self.colors["primary2"])
+        self.mode_label.pack(anchor="w", padx=12)
+        self.mode_button = self._button(mode, T("change_mode"), self.change_mode)
+        self.mode_button.pack(fill="x", padx=10, pady=9)
 
-        # Язык
-        self.lang_button = tk.Button(
-            self.root,
-            text="🇺🇦 Українська" if UI_LANGUAGE == "ru" else "🇷🇺 Русский",
-            command=self.toggle_language,
-            font=("Arial", 8, "bold"), bg=self.colors["panel2"],
-            fg=self.colors["muted"], relief="flat", bd=0, cursor="hand2"
-        )
-        self.lang_button.place(x=50, y=584, width=210, height=28)
+        # Voice controls
+        vc = self._card(self.sidebar)
+        vc.pack(fill="x", padx=12, pady=7)
+        tk.Label(vc, text="VOICE", font=("Segoe UI", 8, "bold"),
+                 bg=self.colors["panel"], fg=self.colors["dim"]).pack(anchor="w", padx=12, pady=(11,5))
 
-        # Ручная запись
-        self.manual_record_button = tk.Button(
-            self.root, text=T("manual_input_btn"),
-            command=self.toggle_manual_record,
-            font=("Arial", 8, "bold"), bg=self.colors["primary"],
-            fg="white", activebackground=self.colors["primary2"],
-            relief="flat", bd=0, cursor="hand2"
+        self.manual_record_button = self._button(
+            vc, T("manual_input_btn"), self.toggle_manual_record, accent=True
         )
-        self.manual_record_button.place(x=50, y=620, width=210, height=31)
+        self.manual_record_button.pack(fill="x", padx=10, pady=3)
 
-        # Громкость
-        self.canvas.create_text(
-            50, 674, text=f"VOLUME  {_music_volume}%",
-            font=("Arial", 7, "bold"), fill=self.colors["dim"], anchor="w"
-        )
-        self.volume_label_id = self.canvas.create_text(
-            260, 674, text=f"{_music_volume}%",
-            font=("Arial", 7, "bold"), fill=self.colors["primary2"], anchor="e"
-        )
-        self.volume_scale = tk.Scale(
-            self.root, from_=0, to=200, orient=tk.HORIZONTAL,
-            bg=self.colors["panel"], fg=self.colors["primary2"],
-            troughcolor=self.colors["line"], activebackground=self.colors["primary"],
-            highlightthickness=0, bd=0, sliderlength=14,
-            command=self.on_volume_change
-        )
-        self.volume_scale.place(x=45, y=684, width=220, height=30)
-        self.volume_scale.set(_music_volume)
+        self.tts_mute_button = self._button(vc, T("voice_on"), self.toggle_tts_mute)
+        self.tts_mute_button.pack(fill="x", padx=10, pady=3)
 
-        self.music_stop_button = tk.Button(
-            self.root, text=T("music_stop"),
-            command=self.stop_music_click,
-            font=("Arial", 7, "bold"), bg=self.colors["panel2"],
-            fg=self.colors["muted"], activebackground=self.colors["red"],
-            relief="flat", bd=0, state=tk.DISABLED, cursor="hand2"
-        )
-        self.music_stop_button.place(x=50, y=720, width=210, height=26)
+        self.corrector_button = self._button(vc, T("corrector_off"), self.toggle_corrector)
+        self.corrector_button.pack(fill="x", padx=10, pady=(3,10))
 
-        # Центральный блок
-        self.rounded_rect(
-            308, 92, 900, 500, 26,
-            self.colors["panel"], self.colors["line"]
-        )
-        self.canvas.create_text(
-            338, 120, text="MITA CORE",
-            font=("Arial", 8, "bold"), fill=self.colors["dim"], anchor="w"
-        )
-        self.canvas.create_text(
-            870, 120, text="LIVE",
-            font=("Arial", 7, "bold"), fill=self.colors["green"], anchor="e"
-        )
+        # Key
+        key_card = self._card(self.sidebar)
+        key_card.pack(fill="x", padx=12, pady=7)
+        tk.Label(key_card, text="ACCESS KEY", font=("Segoe UI", 8, "bold"),
+                 bg=self.colors["panel"], fg=self.colors["dim"]).pack(anchor="w", padx=12, pady=(10,2))
+        self.key_info_label = tk.Label(key_card, text="",
+                                       font=("Segoe UI", 8, "bold"),
+                                       bg=self.colors["panel"], fg=self.colors["text"])
+        self.key_info_label.pack(anchor="w", padx=12)
+        self.change_key_btn = self._button(key_card, T("change_key"), self.change_key)
+        self.change_key_btn.pack(fill="x", padx=10, pady=(7,10))
 
-        self.cx, self.cy = 604, 292
-        self.aura = []
-        for radius in (190, 160, 132, 108):
-            self.aura.append(
-                self.canvas.create_oval(
-                    self.cx-radius, self.cy-radius,
-                    self.cx+radius, self.cy+radius,
-                    outline=self.colors["line"], width=1
-                )
-            )
+    def build_content(self):
+        self.pages = {}
+        self.build_home_page()
+        self.build_chat_page()
+        self.build_commands_page()
+        self.build_settings_page()
 
-        self.core_outer = self.canvas.create_oval(
-            self.cx-88, self.cy-88, self.cx+88, self.cy+88,
-            fill="#10172a", outline=self.colors["primary"], width=2
-        )
-        self.core_inner = self.canvas.create_oval(
-            self.cx-67, self.cy-67, self.cx+67, self.cy+67,
-            fill="#151c31", outline=self.colors["cyan"], width=1
-        )
+    def _page(self):
+        f = tk.Frame(self.content, bg=self.colors["bg2"])
+        return f
 
-        self.heart_size = 48
-        self.heart = self.create_heart(
-            self.cx, self.cy, self.heart_size, self.colors["primary"]
-        )
-        self.heart_glow = self.canvas.create_oval(
-            self.cx-80, self.cy-80, self.cx+80, self.cy+80,
-            outline=self.colors["primary"], width=2
-        )
+    def build_home_page(self):
+        page = self._page()
+        self.pages[0] = page
 
-        self.orbit_elements = []
-        for i in range(12):
-            obj = self.canvas.create_text(
-                self.cx, self.cy, text="•",
-                font=("Arial", 7 + i % 4, "bold"),
-                fill=self.colors["cyan"]
-            )
-            self.orbit_elements.append({
-                "id": obj,
-                "angle": i * math.pi*2/12,
-                "radius": 120 + (i % 3)*24,
-                "speed": 0.008 + i*0.001
-            })
+        # Hero
+        hero = tk.Frame(page, bg=self.colors["bg2"])
+        hero.pack(fill="x", padx=24, pady=(22, 12))
+        tk.Label(hero, text="Добро пожаловать обратно", font=("Segoe UI", 20, "bold"),
+                 bg=self.colors["bg2"], fg=self.colors["text"]).pack(anchor="w")
+        tk.Label(hero, text="MITA готова слушать, отвечать и выполнять команды.",
+                 font=("Segoe UI", 9), bg=self.colors["bg2"],
+                 fg=self.colors["muted"]).pack(anchor="w", pady=(3,0))
 
-        self.status_text = self.canvas.create_text(
-            self.cx, 478, text=T("ready"),
-            font=("Arial", 13, "bold"), fill=self.colors["primary2"]
-        )
-        self.status_sub = self.canvas.create_text(
-            self.cx, 502, text=T("waiting"),
-            font=("Arial", 8), fill=self.colors["muted"]
-        )
+        # Main grid
+        grid = tk.Frame(page, bg=self.colors["bg2"])
+        grid.pack(fill="both", expand=True, padx=24, pady=(0,20))
+        grid.columnconfigure(0, weight=3)
+        grid.columnconfigure(1, weight=2)
+        grid.rowconfigure(0, weight=1)
+        grid.rowconfigure(1, weight=1)
 
-        # Аудио-эквалайзер
-        self.bars = []
-        for i in range(31):
-            x = self.cx - 155 + i*10
-            bar = self.canvas.create_rectangle(
-                x, 548, x+5, 552,
-                fill=self.colors["line"], outline=""
-            )
-            self.bars.append({
-                "id": bar, "x": x, "base": 552,
-                "height": 4, "phase": random.random()*math.pi*2
-            })
+        core = self._card(grid, "MITA CORE", "LIVE")
+        core.grid(row=0, column=0, rowspan=2, sticky="nsew", padx=(0,8), pady=4)
 
-        # Карточка музыки
-        self.rounded_rect(
-            326, 132, 882, 222, 16,
-            self.colors["panel2"], self.colors["line"]
-        )
-        self.canvas.create_text(
-            350, 153, text="NOW PLAYING",
-            font=("Arial", 7, "bold"), fill=self.colors["dim"], anchor="w"
-        )
-        self.music_icon = self.canvas.create_text(
-            360, 184, text="♫",
-            font=("Arial", 24, "bold"), fill=self.colors["pink"]
-        )
-        self.music_title = self.canvas.create_text(
-            395, 178, text=self.music_track,
-            font=("Arial", 9, "bold"), fill=self.colors["text"], anchor="w"
-        )
-        self.music_state = self.canvas.create_text(
-            395, 198, text="Ожидаю команду",
-            font=("Arial", 7), fill=self.colors["muted"], anchor="w"
-        )
+        self.core_canvas = tk.Canvas(core, bg=self.colors["panel"], highlightthickness=0)
+        self.core_canvas.pack(fill="both", expand=True, padx=10, pady=10)
+        self.core_canvas.bind("<Configure>", self._resize_core)
 
-        # Правая панель
-        self.rounded_rect(
-            918, 92, self.W-18, self.H-18, 22,
-            self.colors["panel"], self.colors["line"]
-        )
-        self.canvas.create_text(
-            944, 120, text="COMMAND MATRIX",
-            font=("Arial", 8, "bold"), fill=self.colors["dim"], anchor="w"
-        )
+        info = self._card(grid, "SYSTEM STATUS", "REAL TIME")
+        info.grid(row=0, column=1, sticky="nsew", padx=(8,0), pady=4)
 
-        commands = [
-            ("01", "ЗАПУСК", "запусти [программа]"),
-            ("02", "САЙТ", "открой [сайт]"),
-            ("03", "ОКНО", "перемести [окно] на 2"),
-            ("04", "ПЕЧАТЬ", "напиши [текст]"),
-            ("05", "МУЗЫКА", "включи песню [название]"),
-            ("06", "СТОП", "стоп музыка"),
-            ("07", "ГРОМКОСТЬ", "громкость 80"),
-            ("08", "СКРИН", "сделай скриншот"),
-            ("09", "КОПИ", "скопируй"),
-            ("10", "ВСТАВКА", "вставь"),
-        ]
-        y = 153
-        for num, title, desc in commands:
-            self.canvas.create_text(
-                944, y, text=num, font=("Arial", 7, "bold"),
-                fill=self.colors["cyan"], anchor="w"
-            )
-            self.canvas.create_text(
-                978, y, text=title, font=("Arial", 8, "bold"),
-                fill=self.colors["text"], anchor="w"
-            )
-            self.canvas.create_text(
-                978, y+16, text=desc, font=("Arial", 7),
-                fill=self.colors["muted"], anchor="w"
-            )
-            y += 51
+        stats = tk.Frame(info, bg=self.colors["panel"])
+        stats.pack(fill="both", expand=True, padx=15, pady=12)
+        self.status_text = tk.Label(stats, text=T("ready"),
+                                    font=("Segoe UI", 13, "bold"),
+                                    bg=self.colors["panel"], fg=self.colors["primary2"])
+        self.status_text.pack(anchor="w", pady=(4,2))
+        self.status_sub = tk.Label(stats, text=T("waiting"),
+                                   font=("Segoe UI", 9),
+                                   bg=self.colors["panel"], fg=self.colors["muted"])
+        self.status_sub.pack(anchor="w", pady=(0,12))
 
-        # Чат снизу по центру
-        self.rounded_rect(
-            308, 610, 900, self.H-18, 22,
-            self.colors["panel"], self.colors["line"]
-        )
-        self.canvas.create_text(
-            332, 635, text=T("chat_with_mita"),
-            font=("Arial", 9, "bold"), fill=self.colors["primary2"], anchor="w"
-        )
-        self.canvas.create_text(
-            332, 654, text="Текстовый канал • Ctrl+A / Ctrl+C / Ctrl+V",
-            font=("Arial", 7), fill=self.colors["muted"], anchor="w"
-        )
+        self.ram_value = tk.Label(stats, text="— MB", font=("Segoe UI", 18, "bold"),
+                                  bg=self.colors["panel"], fg=self.colors["text"])
+        self.ram_value.pack(anchor="w")
+        tk.Label(stats, text="RAM USAGE", font=("Segoe UI", 7, "bold"),
+                 bg=self.colors["panel"], fg=self.colors["dim"]).pack(anchor="w")
 
-        self.chat_frame = tk.Frame(self.root, bg=self.colors["panel"])
-        self.chat_frame.place(x=325, y=666, width=560, height=62)
+        self.audio_value = tk.Label(stats, text="● QUIET", font=("Segoe UI", 9, "bold"),
+                                    bg=self.colors["panel"], fg=self.colors["muted"])
+        self.audio_value.pack(anchor="w", pady=(15,0))
+
+        quick = self._card(grid, "QUICK ACTIONS", "ONE CLICK")
+        quick.grid(row=1, column=1, sticky="nsew", padx=(8,0), pady=4)
+
+        q = tk.Frame(quick, bg=self.colors["panel"])
+        q.pack(fill="both", expand=True, padx=14, pady=12)
+        self._button(q, "🎤  Говорить", self.toggle_manual_record, accent=True).pack(fill="x", pady=3)
+        self._button(q, "🗑  Очистить чат", self.clear_chat).pack(fill="x", pady=3)
+        self._button(q, "⏹  Стоп музыки", self.stop_music_click, danger=True).pack(fill="x", pady=3)
+        self._button(q, "⚙  Настройки", lambda: self.switch_tab(3)).pack(fill="x", pady=3)
+
+        # Music player
+        music = self._card(page, "NOW PLAYING", "MUSIC CORE")
+        music.pack(fill="x", padx=24, pady=(0,20))
+        mf = tk.Frame(music, bg=self.colors["panel"])
+        mf.pack(fill="x", padx=15, pady=12)
+        self.music_icon = tk.Label(mf, text="♫", font=("Segoe UI", 24, "bold"),
+                                   bg=self.colors["panel"], fg=self.colors["primary2"])
+        self.music_icon.pack(side="left", padx=(0,12))
+        mt = tk.Frame(mf, bg=self.colors["panel"])
+        mt.pack(side="left", fill="x", expand=True)
+        self.music_title = tk.Label(mt, text="Музыка не играет",
+                                    font=("Segoe UI", 10, "bold"),
+                                    bg=self.colors["panel"], fg=self.colors["text"])
+        self.music_title.pack(anchor="w")
+        self.music_meta = tk.Label(mt, text="Голосовая команда: «Мита, включи песню…»",
+                                   font=("Segoe UI", 8), bg=self.colors["panel"],
+                                   fg=self.colors["muted"])
+        self.music_meta.pack(anchor="w", pady=(3,0))
+        self.music_stop_button = self._button(mf, T("music_stop"), self.stop_music_click, danger=True)
+        self.music_stop_button.pack(side="right")
+        self.music_stop_button.config(state=tk.DISABLED)
+
+    def build_chat_page(self):
+        page = self._page()
+        self.pages[1] = page
+
+        head = tk.Frame(page, bg=self.colors["bg2"])
+        head.pack(fill="x", padx=24, pady=(22,10))
+        tk.Label(head, text="Чат с Митой", font=("Segoe UI", 20, "bold"),
+                 bg=self.colors["bg2"], fg=self.colors["text"]).pack(side="left")
+        self.chat_counter = tk.Label(head, text="0 сообщений",
+                                     font=("Segoe UI", 8, "bold"),
+                                     bg=self.colors["bg2"], fg=self.colors["muted"])
+        self.chat_counter.pack(side="right", pady=8)
+
+        card = self._card(page)
+        card.pack(fill="both", expand=True, padx=24, pady=(0,18))
+
         self.chat_display = scrolledtext.ScrolledText(
-            self.chat_frame, bg="#080c15", fg=self.colors["text"],
-            font=("Arial", 8), wrap=tk.WORD, bd=0,
-            relief="flat", highlightthickness=1,
-            highlightbackground=self.colors["line"],
-            highlightcolor=self.colors["primary"]
+            card, bg=self.colors["chat_bg"], fg=self.colors["text"],
+            font=("Segoe UI", 10), wrap=tk.WORD, bd=0, relief="flat",
+            insertbackground=self.colors["primary2"], padx=16, pady=14,
+            selectbackground=self.colors["primary"]
         )
-        self.chat_display.pack(fill=tk.BOTH, expand=True)
+        self.chat_display.pack(fill="both", expand=True, padx=10, pady=10)
         self.chat_display.config(state=tk.DISABLED)
 
-        self.chat_menu = Menu(
-            self.root, tearoff=0, bg=self.colors["panel2"],
-            fg=self.colors["text"], activebackground=self.colors["primary"]
-        )
-        self.chat_menu.add_command(
-            label="📋 Копировать", command=self.copy_selected_message
-        )
-        self.chat_menu.add_command(
-            label="📋 Копировать всё", command=self.copy_all_chat
-        )
+        self.chat_display.tag_config("mita_name", foreground=self.colors["primary2"],
+                                     font=("Segoe UI", 9, "bold"))
+        self.chat_display.tag_config("mita_text", foreground="#e9e5eb",
+                                     font=("Segoe UI", 10))
+        self.chat_display.tag_config("user_name", foreground=self.colors["purple"],
+                                     font=("Segoe UI", 9, "bold"))
+        self.chat_display.tag_config("user_text", foreground=self.colors["text"],
+                                     font=("Segoe UI", 10))
+
+        self.chat_menu = Menu(self.root, tearoff=0, bg=self.colors["panel2"],
+                              fg=self.colors["text"], activebackground=self.colors["primary"],
+                              activeforeground="white")
+        self.chat_menu.add_command(label="📋 Копировать сообщение", command=self.copy_selected_message)
+        self.chat_menu.add_command(label="📋 Копировать всё", command=self.copy_all_chat)
         self.chat_menu.add_separator()
-        self.chat_menu.add_command(
-            label="🗑 Очистить", command=self.clear_chat
-        )
+        self.chat_menu.add_command(label="🗑 Очистить чат", command=self.clear_chat)
         self.chat_display.bind("<Button-3>", self.show_chat_menu)
         self.chat_display.bind("<Control-c>", lambda e: self.copy_selected_message())
         self.chat_display.bind("<Control-a>", lambda e: self.select_all_chat())
 
-        self.input_frame = tk.Frame(self.root, bg=self.colors["panel"])
-        self.input_frame.place(x=325, y=730, width=560, height=35)
+        bottom = tk.Frame(card, bg=self.colors["panel"])
+        bottom.pack(fill="x", padx=10, pady=(0,10))
         self.chat_input = tk.Entry(
-            self.input_frame, bg=self.colors["panel2"], fg=self.colors["text"],
-            insertbackground=self.colors["cyan"], font=("Arial", 9),
-            bd=0, relief="flat"
+            bottom, bg=self.colors["panel3"], fg=self.colors["text"],
+            font=("Segoe UI", 10), relief="flat", bd=0,
+            insertbackground=self.colors["primary2"]
         )
-        self.chat_input.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(0,5))
+        self.chat_input.pack(side="left", fill="x", expand=True, ipady=11, padx=(0,8))
         self.chat_input.bind("<Return>", lambda e: self.send_chat_message())
+        self.chat_input.bind("<Button-3>", self.show_input_menu)
         self.chat_input.bind("<Control-a>", lambda e: self.select_all_input())
         self.chat_input.bind("<Control-c>", lambda e: self.copy_input_text())
         self.chat_input.bind("<Control-v>", lambda e: self.paste_input_text())
-        self.chat_input.bind("<Button-3>", self.show_input_menu)
+        self.chat_input.bind("<Control-x>", lambda e: self.cut_input_text())
 
-        self.send_button = tk.Button(
-            self.input_frame, text="➤", command=self.send_chat_message,
-            font=("Arial", 11, "bold"), bg=self.colors["primary"],
-            fg="white", activebackground=self.colors["primary2"],
-            relief="flat", bd=0, cursor="hand2"
-        )
-        self.send_button.pack(side=tk.RIGHT, fill=tk.Y)
+        self.send_button = self._button(bottom, "➤", self.send_chat_message, accent=True)
+        self.send_button.pack(side="right", ipadx=10, ipady=4)
 
-        self.command_text = self.canvas.create_text(
-            944, self.H-55, text="LAST COMMAND  —",
-            font=("Arial", 7, "bold"), fill=self.colors["dim"], anchor="w"
-        )
-
-        self.audio_indicator = self.canvas.create_text(
-            self.W-45, self.H-40, text="●",
-            font=("Arial", 10, "bold"), fill=self.colors["dim"]
-        )
-
-        self.ram_text = self.canvas.create_text(
-            944, self.H-35, text=f"RAM {self.get_ram_usage()} MB",
-            font=("Arial", 7), fill=self.colors["muted"], anchor="w"
-        )
-
-        self.create_particles()
-        self.create_stars()
+        self.input_menu = Menu(self.root, tearoff=0, bg=self.colors["panel2"],
+                               fg=self.colors["text"], activebackground=self.colors["primary"])
+        self.input_menu.add_command(label="✂ Вырезать", command=self.cut_input_text)
+        self.input_menu.add_command(label="📋 Копировать", command=self.copy_input_text)
+        self.input_menu.add_command(label="📎 Вставить", command=self.paste_input_text)
+        self.input_menu.add_separator()
+        self.input_menu.add_command(label="🗑 Очистить", command=self.clear_input_text)
+        self.input_menu.add_command(label="↔ Выделить всё", command=self.select_all_input)
 
         hello_msg = (
             f"{T('mita_greeting')}\n"
             f"{T('mita_mode')}{get_mode_name(_mita_mode)}\n"
-            f"{T('mita_corrector')}"
-            f"{T('corrector_off_info') if not _text_corrector_enabled else T('corrector_on_info')}\n"
+            f"{T('mita_corrector')}{T('corrector_off_info') if not _text_corrector_enabled else T('corrector_on_info')}\n"
             f"{T('mita_lang')}\n{T('mita_help')}"
         )
         self.add_chat_message("Мита", hello_msg, is_mita=True)
-        self.current_tab = 0
-        self.update_key_info()
 
-    # --------------------- UI helpers ---------------------
+    def build_commands_page(self):
+        page = self._page()
+        self.pages[2] = page
+        head = tk.Frame(page, bg=self.colors["bg2"])
+        head.pack(fill="x", padx=24, pady=(22,12))
+        tk.Label(head, text="Команды MITA", font=("Segoe UI", 20, "bold"),
+                 bg=self.colors["bg2"], fg=self.colors["text"]).pack(anchor="w")
+        tk.Label(head, text="Говори естественно — MITA понимает русские и украинские команды.",
+                 font=("Segoe UI", 9), bg=self.colors["bg2"],
+                 fg=self.colors["muted"]).pack(anchor="w", pady=(3,0))
 
-    def create_background(self):
-        for y in range(self.H):
-            t = y / max(1, self.H-1)
-            r = int(7 + 5*t)
-            g = int(9 + 6*t)
-            b = int(17 + 10*t)
-            self.canvas.create_line(0, y, self.W, y, fill=f"#{r:02x}{g:02x}{b:02x}")
-        for x in range(-self.H, self.W, 100):
-            self.canvas.create_line(
-                x, 0, x+self.H, self.H,
-                fill="#0d1423"
-            )
+        wrap = tk.Frame(page, bg=self.colors["bg2"])
+        wrap.pack(fill="both", expand=True, padx=24, pady=(0,20))
+        wrap.columnconfigure(0, weight=1)
+        wrap.columnconfigure(1, weight=1)
+
+        commands = [
+            ("🚀", "Запусти", "[программа]", "Discord, Roblox, Steam, Telegram и др."),
+            ("🌐", "Открой", "[сайт]", "YouTube, TikTok, Google, GitHub и др."),
+            ("✕", "Закрой", "[программа]", "Закрывает приложение через процесс."),
+            ("⌨", "Напиши", "[текст]", "Печатает текст в активное окно."),
+            ("▣", "Сверни все", "", "Сворачивает все окна Windows."),
+            ("▤", "Скриншот", "", "Делает снимок экрана."),
+            ("◉", "Скопируй / Вставь", "", "Ctrl+C / Ctrl+V."),
+            ("↔", "Переведи", "[на 1/2 монитор]", "Перемещает окно между мониторами."),
+            ("♫", "Песня", "[название]", "Ищет локальную музыку или YouTube."),
+            ("🔊", "Громкость", "[0-200%]", "Изменяет громкость музыки."),
+            ("⏹", "Стоп музыка", "", "Останавливает текущий трек."),
+            ("🌍", "Смени язык", "", "Меняет системную раскладку/язык."),
+        ]
+        for i, (icon, title, tail, desc) in enumerate(commands):
+            c = self._card(wrap)
+            r, col = divmod(i, 2)
+            c.grid(row=r, column=col, sticky="nsew", padx=(0 if col==0 else 8, 8 if col==0 else 0),
+                   pady=5)
+            c.grid_propagate(False)
+            c.config(height=78)
+            row = tk.Frame(c, bg=self.colors["panel"])
+            row.pack(fill="both", expand=True, padx=12, pady=10)
+            tk.Label(row, text=icon, font=("Segoe UI", 17),
+                     bg=self.colors["panel"], fg=self.colors["primary2"]).pack(side="left", padx=(2,10))
+            txt = tk.Frame(row, bg=self.colors["panel"])
+            txt.pack(fill="both", expand=True)
+            tk.Label(txt, text=f"{title} {tail}".strip(),
+                     font=("Segoe UI", 9, "bold"), bg=self.colors["panel"],
+                     fg=self.colors["text"]).pack(anchor="w")
+            tk.Label(txt, text=desc, font=("Segoe UI", 7),
+                     bg=self.colors["panel"], fg=self.colors["muted"]).pack(anchor="w", pady=(3,0))
+
+    def build_settings_page(self):
+        page = self._page()
+        self.pages[3] = page
+
+        head = tk.Frame(page, bg=self.colors["bg2"])
+        head.pack(fill="x", padx=24, pady=(22,12))
+        tk.Label(head, text="Настройки", font=("Segoe UI", 20, "bold"),
+                 bg=self.colors["bg2"], fg=self.colors["text"]).pack(anchor="w")
+        tk.Label(head, text="Персонализируй голос, язык, режим и музыку.",
+                 font=("Segoe UI", 9), bg=self.colors["bg2"],
+                 fg=self.colors["muted"]).pack(anchor="w", pady=(3,0))
+
+        scroll = tk.Frame(page, bg=self.colors["bg2"])
+        scroll.pack(fill="both", expand=True, padx=24, pady=(0,20))
+
+        # Language
+        lang = self._card(scroll, "LANGUAGE", "INTERFACE")
+        lang.pack(fill="x", pady=5)
+        lr = tk.Frame(lang, bg=self.colors["panel"])
+        lr.pack(fill="x", padx=16, pady=14)
+        self.lang_button = self._button(lr,
+            "🇺🇦 Українська" if UI_LANGUAGE == "ru" else "🇷🇺 Русский",
+            self.toggle_language)
+        self.lang_button.pack(side="right")
+        tk.Label(lr, text="Язык интерфейса", font=("Segoe UI", 10, "bold"),
+                 bg=self.colors["panel"], fg=self.colors["text"]).pack(side="left")
+        tk.Label(lr, text="RU / UA", font=("Segoe UI", 8),
+                 bg=self.colors["panel"], fg=self.colors["muted"]).pack(side="left", padx=12)
+
+        # Mode
+        mode = self._card(scroll, "AI MODE", "CORE")
+        mode.pack(fill="x", pady=5)
+        mr = tk.Frame(mode, bg=self.colors["panel"])
+        mr.pack(fill="x", padx=16, pady=14)
+        self.mode_setting_label = tk.Label(mr, text=get_mode_name(_mita_mode),
+                                           font=("Segoe UI", 10, "bold"),
+                                           bg=self.colors["panel"], fg=self.colors["primary2"])
+        self.mode_setting_label.pack(side="left")
+        self._button(mr, T("change_mode"), self.change_mode).pack(side="right")
+
+        # Music
+        music = self._card(scroll, "MUSIC", "AUDIO")
+        music.pack(fill="x", pady=5)
+        mv = tk.Frame(music, bg=self.colors["panel"])
+        mv.pack(fill="x", padx=16, pady=12)
+        self.volume_label = tk.Label(mv, text=f"🔊 {T('volume')}: {_music_volume}%",
+                                      font=("Segoe UI", 9, "bold"),
+                                      bg=self.colors["panel"], fg=self.colors["text"])
+        self.volume_label.pack(anchor="w")
+        self.volume_scale = tk.Scale(
+            mv, from_=0, to=200, orient=tk.HORIZONTAL,
+            bg=self.colors["panel"], fg=self.colors["primary2"],
+            activebackground=self.colors["primary"], troughcolor=self.colors["panel3"],
+            highlightthickness=0, bd=0, showvalue=False,
+            command=self.on_volume_change
+        )
+        self.volume_scale.pack(fill="x", pady=(7,0))
+        self.volume_scale.set(_music_volume)
+
+        # Key
+        access = self._card(scroll, "ACCESS", "SECURITY")
+        access.pack(fill="x", pady=5)
+        ar = tk.Frame(access, bg=self.colors["panel"])
+        ar.pack(fill="x", padx=16, pady=12)
+        self.settings_key_label = tk.Label(ar, text="",
+                                           font=("Segoe UI", 9, "bold"),
+                                           bg=self.colors["panel"], fg=self.colors["text"])
+        self.settings_key_label.pack(side="left")
+        self._button(ar, T("change_key"), self.change_key).pack(side="right")
+
+    # -------------------- pages/navigation --------------------
+
+    def switch_tab(self, idx):
+        self.current_tab = idx
+        for i, (row, icon, label) in enumerate(self.nav_items):
+            active = i == idx
+            bg = self.colors["panel3"] if active else self.colors["panel"]
+            fg = self.colors["text"] if active else self.colors["muted"]
+            row.config(bg=bg)
+            icon.config(bg=bg, fg=self.colors["primary2"] if active else self.colors["muted"])
+            label.config(bg=bg, fg=fg)
+        for p in self.pages.values():
+            p.pack_forget()
+        self.pages[idx].pack(fill="both", expand=True)
+
+    # -------------------- core animation --------------------
+
+    def _resize_core(self, event=None):
+        if not hasattr(self, "core_canvas"):
+            return
+        w = max(300, self.core_canvas.winfo_width())
+        h = max(260, self.core_canvas.winfo_height())
+        self.cx, self.cy = w/2, h/2 + 5
+        if not hasattr(self, "core_ready"):
+            self._build_core_art(w, h)
+            self.core_ready = True
+
+    def _build_core_art(self, w, h):
+        c = self.core_canvas
+        self.aura = []
+        for r, col in [(150,"#24172d"),(125,"#33203e"),(102,"#46234b"),(83,"#62295a")]:
+            self.aura.append(c.create_oval(self.cx-r,self.cy-r,self.cx+r,self.cy+r,
+                                           outline=col, width=1))
+        self.core_outer = c.create_oval(self.cx-66,self.cy-66,self.cx+66,self.cy+66,
+                                        fill="#170e1e", outline=self.colors["primary"], width=2)
+        self.core_inner = c.create_oval(self.cx-51,self.cy-51,self.cx+51,self.cy+51,
+                                        fill="#211426", outline=self.colors["purple"], width=1)
+        self.heart = self.create_heart(self.cx, self.cy, 40, self.colors["primary"])
+        self.heart_glow = c.create_oval(self.cx-60,self.cy-60,self.cx+60,self.cy+60,
+                                        outline=self.colors["primary"], width=2)
+        self.orbit_elements = []
+        for i in range(12):
+            obj = c.create_text(self.cx,self.cy,text="✦",
+                                font=("Segoe UI", 8+(i%3),"bold"),
+                                fill=self.colors["purple"])
+            self.orbit_elements.append({
+                "id":obj, "angle":i*math.pi*2/12,
+                "radius":112+(i%2)*20, "speed":0.006+i*0.0009
+            })
+        self.bars = []
+        start = self.cx - 115
+        for i in range(24):
+            x = start+i*10
+            o = c.create_rectangle(x,self.cy+95,x+5,self.cy+97,
+                                   fill=self.colors["purple"], outline="")
+            self.bars.append({"id":o,"x":x,"height":2,"phase":random.random()*6.28})
 
     def create_heart(self, x, y, size, color):
-        points = []
-        for t in range(0, 360, 5):
-            rad = math.radians(t)
-            hx = 16*math.sin(rad)**3
-            hy = (
-                13*math.cos(rad)
-                - 5*math.cos(2*rad)
-                - 2*math.cos(3*rad)
-                - math.cos(4*rad)
-            )
-            points += [x+hx*size/16, y-hy*size/16]
-        return {
-            "id": self.canvas.create_polygon(
-                points, fill=color, outline=color, width=2
-            ),
-            "glow": self.canvas.create_polygon(
-                points, fill="", outline=self.colors["pink"], width=2
-            )
-        }
-
-    def create_particles(self):
-        self.particles = []
-        for _ in range(38):
-            self.particles.append({
-                "angle": random.random()*math.pi*2,
-                "radius": random.uniform(95, 215),
-                "speed": random.uniform(.12,.7),
-                "symbol": random.choice(["·","✦","•","◇"]),
-                "id": None
-            })
-
-    def create_stars(self):
-        self.stars = []
-        for _ in range(48):
-            x = random.randint(15, self.W-15)
-            y = random.randint(85, self.H-15)
-            size = random.choice([1,2,2,3])
-            obj = self.canvas.create_oval(
-                x,y,x+size,y+size, fill="#28344e", outline=""
-            )
-            self.stars.append({
-                "id": obj, "x": x, "y": y,
-                "speed": random.uniform(.3,1.1)
-            })
-
-    def get_ram_usage(self):
-        try:
-            return int(psutil.Process().memory_info().rss/1024/1024)
-        except Exception:
-            return 0
-
-    def update_heart(self, size, color):
-        points = []
-        scale = 1 + math.sin(self.beat_phase)*self.heart_beat_strength*.18
+        points=[]
         for t in range(0,360,5):
-            rad = math.radians(t)
-            hx = 16*math.sin(rad)**3
-            hy = (
-                13*math.cos(rad)
-                - 5*math.cos(2*rad)
-                - 2*math.cos(3*rad)
-                - math.cos(4*rad)
-            )
-            points += [
-                self.cx+hx*size/16*scale,
-                self.cy-hy*size/16*scale
-            ]
-        self.canvas.coords(self.heart["id"], *points)
-        self.canvas.coords(self.heart["glow"], *points)
-        self.canvas.itemconfig(self.heart["id"], fill=color, outline=color)
-        self.canvas.itemconfig(self.heart["glow"], outline=self.colors["pink"])
+            r=math.radians(t)
+            hx=16*math.sin(r)**3
+            hy=13*math.cos(r)-5*math.cos(2*r)-2*math.cos(3*r)-math.cos(4*r)
+            points += [x+hx*size/16, y-hy*size/16]
+        hid=self.core_canvas.create_polygon(points,fill=color,outline=color,width=2)
+        gid=self.core_canvas.create_polygon(points,fill="",outline=self.colors["primary2"],width=2)
+        return {"id":hid,"glow":gid}
+
+    def update_heart(self, size, color, glow_intensity=1.0):
+        if not hasattr(self, "heart"):
+            return
+        points=[]
+        scale=1+(math.sin(self.beat_phase)*self.heart_beat_strength*0.06)
+        for t in range(0,360,5):
+            r=math.radians(t)
+            hx=16*math.sin(r)**3
+            hy=13*math.cos(r)-5*math.cos(2*r)-2*math.cos(3*r)-math.cos(4*r)
+            points += [self.cx+hx*size/16*scale, self.cy-hy*size/16*scale]
+        self.core_canvas.coords(self.heart["id"],*points)
+        self.core_canvas.coords(self.heart["glow"],*points)
+        self.core_canvas.itemconfig(self.heart["id"],fill=color,outline=color)
+        self.core_canvas.itemconfig(self.heart["glow"],outline=self.colors["primary2"])
 
     def update_heart_beat(self, strength):
         self.heart_beat_target = strength
-        if strength > .08:
-            self.heart_bpm = (
-                125 + int(strength*75) if self.music_mode
-                else 72 + int(strength*45)
-            )
+        if strength > .1:
+            self.heart_bpm = (120+int(strength*80)) if self.music_mode else (72+int(strength*48))
+
+    def animate_heart_beat(self):
+        self.heart_beat_strength += (self.heart_beat_target-self.heart_beat_strength)*.15
+        self.beat_phase += .025*(self.heart_bpm/60)*2
+        if self.music_mode:
+            self.music_intensity=min(1,self.music_intensity+.01)
+            self.heart_beat_strength=max(self.heart_beat_strength,.28+self.music_intensity*.5)
+        else:
+            self.music_intensity=max(0,self.music_intensity-.02)
+
+        if self.heart_beat_strength>.1:
+            p=min(1,self.heart_beat_strength*1.5)
+            r=int(255-(255-167)*(1-p)); g=int(92-92*(1-p)); b=int(170-170*(1-p))
+            color=f"#{r:02x}{g:02x}{b:02x}"
+        else:
+            color=self.colors["primary"]
+        if hasattr(self,"audio_value"):
+            if self.heart_beat_strength>.15:
+                self.audio_value.config(text=f"● AUDIO • {self.heart_bpm} BPM",fg=self.colors["primary2"])
+            elif self.heart_beat_strength>.05:
+                self.audio_value.config(text="● AUDIO • DETECTED",fg=self.colors["purple"])
+            else:
+                self.audio_value.config(text="● QUIET",fg=self.colors["muted"])
+        return .5+self.heart_beat_strength*.5,color
 
     def animate(self):
         if not self.running:
             return
-
-        self.music_mode = _is_music_mode
-        self.music_intensity = _music_intensity
+        self.music_mode=_is_music_mode
+        self.music_intensity=_music_intensity
         self.angle += .035
-        self.phase += .10
-        self.beat_phase += .035*(self.heart_bpm/60)
-
-        self.heart_beat_strength += (
-            self.heart_beat_target-self.heart_beat_strength
-        )*.14
+        self.phase += .12
+        _, heart_color=self.animate_heart_beat()
 
         if self.music_mode:
-            self.heart_beat_strength = max(
-                self.heart_beat_strength,
-                .42 + self.music_intensity*.35
-            )
-        else:
-            self.heart_beat_strength *= .97
-
-        if self.music_mode:
-            color = self.colors["pink"]
-            status = f"♫  {self.music_track}"
-            sub = "МУЗЫКА ИГРАЕТ • LIVE VISUALIZER"
+            status, sub, color = f"♫  МУЗЫКА ИГРАЕТ  •  {_music_volume}%", "Наслаждайся ритмом", self.colors["primary2"]
+            self.music_title.config(text=_current_track_title or "Музыка")
+            self.music_meta.config(text=f"Громкость {_music_volume}%  •  MUSIC CORE ACTIVE")
+            self.music_stop_button.config(state=tk.NORMAL)
         elif self.is_listening:
-            color = self.colors["cyan"]
-            status, sub = T("listening"), T("listening_sub")
+            status, sub, color=T("listening"),T("listening_sub"),self.colors["primary"]
         elif self.is_processing:
-            color = self.colors["primary2"]
-            status, sub = T("processing"), T("processing_sub")
+            status, sub, color=T("processing"),T("processing_sub"),self.colors["purple"]
         elif self.is_manual_recording:
-            color = self.colors["pink"]
-            status, sub = T("manual_recording"), T("manual_sub")
+            status, sub, color=T("manual_recording"),T("manual_sub"),self.colors["primary2"]
         elif self.tts_muted:
-            color = self.colors["red"]
-            status, sub = "🔇 VOICE MUTED", T("voice_off_status")
+            status, sub, color="🔇  VOICE MUTED",T("voice_off_status"),self.colors["danger"]
         else:
-            color = self.colors["primary2"]
-            status, sub = "✦ MITA ONLINE", T("waiting")
+            status, sub, color=f"✦  {get_mode_name(_mita_mode)}",T("waiting"),self.colors["primary2"]
 
-        pulse = 48 + math.sin(self.angle*2)*3
-        if self.music_mode:
-            pulse *= 1.10 + self.heart_beat_strength*.08
-        self.update_heart(pulse, color)
+        if hasattr(self,"status_text"):
+            self.status_text.config(text=status,fg=color)
+            self.status_sub.config(text=sub)
 
-        self.canvas.itemconfig(self.status_text, text=status, fill=color)
-        self.canvas.itemconfig(self.status_sub, text=sub)
-        self.canvas.itemconfig(self.core_outer, outline=color)
+        if hasattr(self,"core_canvas") and hasattr(self,"heart"):
+            pulse=40+math.sin(self.angle*2)*3
+            if self.heart_beat_strength>.1:
+                pulse=40*(1+math.sin(self.beat_phase)*self.heart_beat_strength*.25)
+            if self.music_mode: pulse*=1.18
+            self.update_heart(pulse,heart_color)
 
-        for i, obj in enumerate(self.aura):
-            delta = math.sin(self.angle*1.2+i)*2
-            delta += self.heart_beat_strength*12*math.sin(self.beat_phase+i)
-            if self.music_mode:
-                delta *= 1.8
-            base = (190,160,132,108)[i]
-            self.canvas.coords(
-                obj,
-                self.cx-base-delta, self.cy-base-delta,
-                self.cx+base+delta, self.cy+base+delta
-            )
-            self.canvas.itemconfig(
-                obj,
-                outline=color if self.music_mode and i == 2 else self.colors["line"]
-            )
+            for i,obj in enumerate(self.aura):
+                d=math.sin(self.angle*1.4+i)*(2+i)+self.heart_beat_strength*8*math.sin(self.beat_phase+i)
+                if self.music_mode: d*=1.7
+                base=[150,125,102,83][i]
+                self.core_canvas.coords(obj,self.cx-base-d,self.cy-base-d,self.cx+base+d,self.cy+base+d)
 
-        for item in self.orbit_elements:
-            item["angle"] += item["speed"]*(2.0 if self.music_mode else 1)
-            r = item["radius"] + self.heart_beat_strength*16
-            x = self.cx + math.cos(item["angle"])*r
-            y = self.cy + math.sin(item["angle"])*r
-            self.canvas.coords(item["id"], x, y)
-            self.canvas.itemconfig(
-                item["id"], fill=self.colors["pink"] if self.music_mode else color
-            )
+            for item in self.orbit_elements:
+                item["angle"]+=item["speed"]
+                rad=item["radius"]+self.heart_beat_strength*12*math.sin(self.beat_phase+item["angle"])
+                if self.music_mode: rad += 5*math.sin(self.phase+item["angle"])
+                self.core_canvas.coords(item["id"],
+                    self.cx+math.cos(item["angle"])*rad,
+                    self.cy+math.sin(item["angle"])*rad)
+                self.core_canvas.itemconfig(item["id"],fill=color)
 
-        for p in self.particles:
-            p["angle"] += p["speed"]*.01
-            r = p["radius"]*(1+self.heart_beat_strength*.08)
-            x = self.cx+math.cos(p["angle"])*r
-            y = self.cy+math.sin(p["angle"])*r
-            if p["id"] is None:
-                p["id"] = self.canvas.create_text(
-                    x,y,text=p["symbol"],
-                    font=("Arial",random.randint(7,11)),
-                    fill=color
-                )
-            else:
-                self.canvas.coords(p["id"],x,y)
-                self.canvas.itemconfig(
-                    p["id"], fill=self.colors["pink"] if self.music_mode else color
-                )
+            for i,bar in enumerate(self.bars):
+                if self.music_mode:
+                    target=5+abs(math.sin(self.phase*1.5+i*.55))*random.randint(15,42)
+                elif self.is_listening or self.is_processing or self.is_manual_recording:
+                    target=5+abs(math.sin(self.phase+i*.55))*random.randint(8,24)
+                else:
+                    target=3+self.heart_beat_strength*18
+                bar["height"]+=(target-bar["height"])*.3
+                self.core_canvas.coords(bar["id"],bar["x"],self.cy+95-bar["height"],bar["x"]+5,self.cy+95)
+                self.core_canvas.itemconfig(bar["id"],fill=color)
 
-        now = time.time()
-        for i, star in enumerate(self.stars):
-            v = .3 + .4*(math.sin(now*star["speed"]+i)+1)/2
-            c = int(38+55*v)
-            self.canvas.itemconfig(
-                star["id"],
-                fill=f"#{c:02x}{int(c*1.1):02x}{int(c*1.45):02x}"
-            )
+        if hasattr(self,"ram_value"):
+            self.ram_value.config(text=f"{self.get_ram_usage()} MB")
+        if hasattr(self,"header_clock"):
+            self.header_clock.config(text=datetime.now().strftime("%H:%M:%S  •  %d.%m.%Y"))
 
-        for i, bar in enumerate(self.bars):
-            if self.music_mode:
-                target = 6 + abs(
-                    math.sin(self.phase*1.8+i*.48)
-                )*random.randint(18,48)
-            elif self.is_listening or self.is_processing or self.is_manual_recording:
-                target = 6 + abs(
-                    math.sin(self.phase+i*.48)
-                )*random.randint(8,25)
-            else:
-                target = 3 + abs(math.sin(self.phase*.4+i)) * 3
-            bar["height"] += (target-bar["height"])*.28
-            h = max(3, bar["height"])
-            self.canvas.coords(
-                bar["id"], bar["x"], bar["base"]-h,
-                bar["x"]+5, bar["base"]
-            )
-            self.canvas.itemconfig(
-                bar["id"],
-                fill=self.colors["pink"] if self.music_mode else color
-            )
+        self.root.after(35,self.animate)
 
-        self.canvas.itemconfig(
-            self.audio_indicator,
-            fill=self.colors["pink"] if self.music_mode else (
-                self.colors["cyan"] if self.heart_beat_strength > .1
-                else self.colors["dim"]
-            )
-        )
-        self.canvas.itemconfig(
-            self.ram_text, text=f"RAM {self.get_ram_usage()} MB"
-        )
-        self.root.after(20, self.animate)
+    # -------------------- background --------------------
 
-    def fade_in(self, alpha=0):
-        if not self.running:
-            return
-        alpha += .08
-        if alpha >= 1:
-            self.root.attributes("-alpha", .98)
-            return
-        self.root.attributes("-alpha", alpha)
-        self.root.after(15, lambda: self.fade_in(alpha))
+    def create_background(self):
+        self.canvas.delete("bg")
+        for y in range(self.H):
+            t=y/max(1,self.H-1)
+            r=int(8+4*t); g=int(9+3*t); b=int(13+8*t)
+            self.canvas.create_line(0,y,self.W,y,fill=f"#{r:02x}{g:02x}{b:02x}",tags="bg")
+        for x in range(-self.H,self.W,100):
+            self.canvas.create_line(x,0,x+self.H,self.H,fill="#0f1118",tags="bg")
 
-    # --------------------- state ---------------------
+    def create_particles(self):
+        self.particles=[]
+        for _ in range(30):
+            self.particles.append({"x":random.randint(0,self.W),"y":random.randint(80,self.H),
+                                   "speed":random.uniform(.2,.7),"phase":random.random()*6.28})
 
-    def set_listening(self, state):
-        self.is_listening = state
-        if state:
-            self.is_processing = False
+    def create_stars(self):
+        self.stars=[]
+        for _ in range(38):
+            x=random.randint(0,self.W); y=random.randint(80,self.H)
+            o=self.canvas.create_oval(x,y,x+2,y+2,fill="#303342",outline="",tags="stars")
+            self.stars.append({"id":o,"x":x,"y":y,"speed":random.uniform(.5,1.4)})
 
-    def set_processing(self, state):
-        self.is_processing = state
-        if state:
-            self.is_listening = False
+    def create_floating_stars(self):
+        self.floating_stars=[]
+        for _ in range(18):
+            self.floating_stars.append({"x":random.randint(0,self.W),"y":random.randint(80,self.H),
+                                        "sx":random.uniform(-.3,.3),"sy":random.uniform(-.25,.25),
+                                        "phase":random.random()*6.28})
 
-    def show_command(self, text):
-        short = re.sub(r"\s+", " ", str(text)).strip()
-        if len(short) > 48:
-            short = short[:48] + "..."
-        self.canvas.itemconfig(
-            self.command_text,
-            text=f"LAST COMMAND  {short or '—'}"
-        )
+    def animate_floating_stars(self):
+        now=time.time()
+        for s in self.floating_stars:
+            s["x"]+=s["sx"]+math.sin(now+s["phase"])*.05
+            s["y"]+=s["sy"]+math.cos(now*.7+s["phase"])*.05
+            if s["x"]<0 or s["x"]>self.W: s["sx"]*=-1
+            if s["y"]<80 or s["y"]>self.H: s["sy"]*=-1
 
-    def set_music_track(self, title, loading=False):
-        self.music_track = title or "Ничего не играет"
-        try:
-            self.canvas.itemconfig(self.music_title, text=self.music_track)
-            self.canvas.itemconfig(
-                self.music_state,
-                text="Поиск и подключение..." if loading
-                else ("ИГРАЕТ • LIVE" if _is_music_mode else "Ожидаю команду")
-            )
-        except Exception:
-            pass
-
-    def update_music_button(self, is_playing):
-        if is_playing:
-            self.music_stop_button.config(
-                text="■  STOP MUSIC", bg=self.colors["red"],
-                fg="white", state=tk.NORMAL
-            )
-            self.set_music_track(_current_track_title or self.music_track)
-        else:
-            self.music_stop_button.config(
-                text=T("music_stop"), bg=self.colors["panel2"],
-                fg=self.colors["muted"], state=tk.DISABLED
-            )
-            if not _is_music_mode:
-                self.set_music_track(self.music_track)
-
-    def update_volume_display(self):
-        if self.volume_scale:
-            self.volume_scale.set(_music_volume)
-        if self.volume_label_id:
-            self.canvas.itemconfig(
-                self.volume_label_id, text=f"{_music_volume}%"
-            )
-
-    # --------------------- language/mode/settings ---------------------
+    # -------------------- controls --------------------
 
     def toggle_language(self):
         global UI_LANGUAGE
-        UI_LANGUAGE = "ua" if UI_LANGUAGE == "ru" else "ru"
+        UI_LANGUAGE="ua" if UI_LANGUAGE=="ru" else "ru"
         _save_ui_language()
         self.refresh_ui()
 
@@ -2202,611 +2150,423 @@ class MisideInterface:
         self.root.title(T("app_title"))
         self.mode_button.config(text=T("change_mode"))
         self.manual_record_button.config(text=T("manual_input_btn"))
-        self.tts_mute_button.config(
-            text=T("voice_on") if not self.tts_muted else T("voice_off")
-        )
+        self.tts_mute_button.config(text=T("voice_on") if not self.tts_muted else T("voice_off"))
+        self.corrector_button.config(text=T("corrector_on") if _text_corrector_enabled else T("corrector_off"))
+        self.lang_button.config(text="🇺🇦 Українська" if UI_LANGUAGE=="ru" else "🇷🇺 Русский")
+        self.change_key_btn.config(text=T("change_key"))
+        self.music_stop_button.config(text=T("music_stop"))
+        self.volume_label.config(text=f"🔊 {T('volume')}: {_music_volume}%")
+        for i,(row,icon,label) in enumerate(self.nav_items):
+            key=[T("nav_main"),T("nav_chat"),T("nav_commands"),T("nav_settings")][i]
+            label.config(text=key)
+        self.update_mode_display()
+        self.update_key_info()
+        self.add_chat_message("Мита",T("lang_changed"),is_mita=True)
+        speak(T("lang_changed"),force=True)
+
+    def toggle_corrector(self):
+        self.corrector_enabled=not self.corrector_enabled
+        set_text_corrector(self.corrector_enabled)
         self.corrector_button.config(
-            text=T("corrector_on") if _text_corrector_enabled else T("corrector_off")
+            text=T("corrector_on") if self.corrector_enabled else T("corrector_off"),
+            bg="#163b2a" if self.corrector_enabled else self.colors["panel3"],
+            fg=self.colors["green"] if self.corrector_enabled else self.colors["text"]
         )
-        self.lang_button.config(
-            text="🇺🇦 Українська" if UI_LANGUAGE == "ru" else "🇷🇺 Русский"
-        )
-        self.music_stop_button.config(
-            text="■  STOP MUSIC" if _is_music_mode else T("music_stop")
-        )
-        self.canvas.itemconfig(
-            self.status_text, text=T("ready") if not _is_music_mode else self.music_track
-        )
-        self.canvas.itemconfig(
-            self.status_sub, text=T("waiting")
-        )
-        self.canvas.itemconfig(
-            self.mode_label, text=get_mode_name(_mita_mode)
-        )
+        msg=T("corrector_on_text") if self.corrector_enabled else T("corrector_off_text")
+        self.add_chat_message("Мита",f"📝 {msg}",is_mita=True)
+        speak(msg,force=True)
 
     def change_mode(self):
-        dialog = tk.Toplevel(self.root)
+        dialog=tk.Toplevel(self.root)
         dialog.title(T("mode"))
-        dialog.geometry("440x330")
+        dialog.geometry("500x420")
         dialog.configure(bg=self.colors["bg"])
-        dialog.resizable(False, False)
-        dialog.transient(self.root)
-        dialog.grab_set()
+        dialog.resizable(False,False)
+        dialog.transient(self.root); dialog.grab_set()
 
-        tk.Label(
-            dialog, text="MITA MODE",
-            font=("Arial",16,"bold"),
-            bg=self.colors["bg"], fg=self.colors["cyan"]
-        ).pack(pady=(24,5))
-        tk.Label(
-            dialog,
-            text="Выберите источник ответов",
-            font=("Arial",9),
-            bg=self.colors["bg"], fg=self.colors["muted"]
-        ).pack(pady=(0,18))
+        tk.Label(dialog,text="AI MODE",font=("Segoe UI",9,"bold"),
+                 bg=self.colors["bg"],fg=self.colors["dim"]).pack(pady=(24,3))
+        tk.Label(dialog,text="Как MITA должна обрабатывать команды?",
+                 font=("Segoe UI",16,"bold"),bg=self.colors["bg"],fg=self.colors["text"]).pack(pady=(0,18))
 
-        var = tk.StringVar(value=_mita_mode)
-        for mode, label, desc in [
-            (MODE_SYSTEM,T("mode_system"),"Системные действия"),
-            (MODE_AI,T("mode_ai"),"Только ИИ"),
-            (MODE_ALL,T("mode_all"),"Система + ИИ"),
-        ]:
-            frame = tk.Frame(dialog,bg=self.colors["panel2"])
-            frame.pack(fill="x",padx=24,pady=4)
-            tk.Radiobutton(
-                frame,text=label,variable=var,value=mode,
-                font=("Arial",9,"bold"),bg=self.colors["panel2"],
-                fg=self.colors["text"],selectcolor=self.colors["panel2"],
-                activebackground=self.colors["panel2"],
-                activeforeground=self.colors["cyan"],bd=0
-            ).pack(side="left",padx=10,pady=9)
-            tk.Label(
-                frame,text=desc,font=("Arial",7),
-                bg=self.colors["panel2"],fg=self.colors["muted"]
-            ).pack(side="right",padx=10)
+        var=tk.StringVar(value=_mita_mode)
+        modes=[
+            (MODE_SYSTEM,"🔧 Только система","Запуск приложений, окна, ввод, скриншоты."),
+            (MODE_AI,"🤖 Только ИИ","Все запросы отправляются в Groq."),
+            (MODE_ALL,"✦ Все вместе","Сначала системные команды, затем ИИ.")
+        ]
+        for mode,label,desc in modes:
+            card=tk.Frame(dialog,bg=self.colors["panel"],highlightbackground=self.colors["line"],highlightthickness=1)
+            card.pack(fill="x",padx=30,pady=5)
+            rb=tk.Radiobutton(card,text=label,variable=var,value=mode,
+                              font=("Segoe UI",10,"bold"),bg=self.colors["panel"],
+                              fg=self.colors["text"],selectcolor=self.colors["panel3"],
+                              activebackground=self.colors["panel"],activeforeground=self.colors["primary2"],
+                              relief="flat",bd=0)
+            rb.pack(anchor="w",padx=12,pady=(9,2))
+            tk.Label(card,text=desc,font=("Segoe UI",8),bg=self.colors["panel"],
+                     fg=self.colors["muted"]).pack(anchor="w",padx=34,pady=(0,9))
 
         def apply():
-            mode = var.get()
+            mode=var.get()
             set_mita_mode(mode)
             self.update_mode_display()
             dialog.destroy()
-            msg = T("mode_changed").format(get_mode_name(mode))
+            msg=T("mode_changed").format(get_mode_name(mode))
             self.add_chat_message("Мита",msg,is_mita=True)
             speak(T("mode_changed_text").format(get_mode_name(mode)),force=True)
 
-        tk.Button(
-            dialog,text=T("apply"),command=apply,
-            font=("Arial",9,"bold"),bg=self.colors["primary"],
-            fg="white",relief="flat",bd=0,cursor="hand2"
-        ).pack(pady=18,ipadx=30,ipady=7)
+        self._button(dialog,T("apply"),apply,accent=True).pack(fill="x",padx=120,pady=18)
 
     def update_mode_display(self):
-        if self.mode_label:
-            self.canvas.itemconfig(
-                self.mode_label,text=get_mode_name(_mita_mode)
-            )
+        if hasattr(self,"mode_label"):
+            self.mode_label.config(text=get_mode_name(_mita_mode))
+        if hasattr(self,"mode_setting_label"):
+            self.mode_setting_label.config(text=get_mode_name(_mita_mode))
 
     def toggle_tts_mute(self):
         global TTS_VOLUME
-        self.tts_muted = not self.tts_muted
+        self.tts_muted=not self.tts_muted
         if self.tts_muted:
-            stop_tts()
-            TTS_VOLUME = 0
-            self.tts_mute_button.config(
-                text=T("voice_off"),bg=self.colors["red"],fg="white"
-            )
+            stop_tts(); TTS_VOLUME=0.0
+            self.tts_mute_button.config(text=T("voice_off"),bg=self.colors["danger"],fg="white")
             self.add_chat_message("Мита",T("voice_off"),is_mita=True)
         else:
-            TTS_VOLUME = 1
-            self.tts_mute_button.config(
-                text=T("voice_on"),bg=self.colors["panel2"],fg=self.colors["green"]
-            )
+            TTS_VOLUME=1.0
+            self.tts_mute_button.config(text=T("voice_on"),bg=self.colors["panel3"],fg=self.colors["green"])
             self.add_chat_message("Мита",T("voice_on"),is_mita=True)
             speak(T("voice_on_text"),force=True)
 
-    def toggle_corrector(self):
-        self.corrector_enabled = not self.corrector_enabled
-        set_text_corrector(self.corrector_enabled)
-        if self.corrector_enabled:
-            self.corrector_button.config(
-                text=T("corrector_on"),fg=self.colors["green"]
-            )
-            msg=T("corrector_on_text")
-        else:
-            self.corrector_button.config(
-                text=T("corrector_off"),fg=self.colors["muted"]
-            )
-            msg=T("corrector_off_text")
-        self.add_chat_message("Мита",msg,is_mita=True)
-        speak(msg,force=True)
-
     def toggle_manual_record(self):
-        if self.is_manual_recording:
-            self.stop_manual_recording()
-        else:
-            self.start_manual_recording()
-
-    # --------------------- manual voice ---------------------
+        if self.is_manual_recording: self.stop_manual_recording()
+        else: self.start_manual_recording()
 
     def start_manual_recording(self):
-        if self.is_manual_recording:
-            return
-        self.is_manual_recording = True
-        self.manual_audio_buffer = []
-        self.manual_record_button.config(
-            text=T("stop_record"),bg=self.colors["red"]
-        )
-        self.set_processing(False)
-        self.canvas.itemconfig(
-            self.status_text,text=T("manual_recording"),
-            fill=self.colors["pink"]
-        )
-        self.manual_recording_thread = threading.Thread(
-            target=self._manual_record_loop,daemon=True
-        )
+        if self.is_manual_recording: return
+        self.is_manual_recording=True; self.manual_audio_buffer=[]
+        self.manual_record_button.config(text=T("stop_record"),bg=self.colors["danger"])
+        self.add_chat_message("Мита","🎤 "+T("manual_sub"),is_mita=True)
+        self.manual_recording_thread=threading.Thread(target=self._manual_record_loop,daemon=True)
         self.manual_recording_thread.start()
 
     def stop_manual_recording(self):
-        if not self.is_manual_recording:
-            return
+        if not self.is_manual_recording: return
         self.is_manual_recording=False
-        self.manual_record_button.config(
-            text=T("manual_input_btn"),bg=self.colors["primary"]
-        )
-        self.set_processing(True)
+        self.manual_record_button.config(text=T("manual_input_btn"),bg=self.colors["primary"])
         if self.manual_audio_buffer:
-            threading.Thread(
-                target=self._process_manual_audio,daemon=True
-            ).start()
+            threading.Thread(target=self._process_manual_audio,daemon=True).start()
         else:
             self.add_chat_message("Мита",T("no_audio"),is_mita=True)
             self._reset_manual_state()
 
     def _manual_record_loop(self):
         try:
-            with sd.InputStream(
-                samplerate=16000,channels=1,dtype="float32",
-                blocksize=1024,callback=self._manual_audio_callback
-            ):
-                while self.is_manual_recording:
-                    time.sleep(.04)
+            with sd.InputStream(samplerate=16000,channels=1,dtype="float32",
+                                blocksize=1024,callback=self._manual_audio_callback):
+                while self.is_manual_recording: time.sleep(.05)
         except Exception as e:
-            self.root.after(
-                0,lambda:self.add_chat_message(
-                    "Мита",T("error_text").format(e),is_mita=True
-                )
-            )
+            self.root.after(0,lambda:self.add_chat_message("Мита",T("error_text").format(e),is_mita=True))
             self.root.after(0,self._reset_manual_state)
 
     def _manual_audio_callback(self,indata,frames,time,status):
-        if self.is_manual_recording:
-            self.manual_audio_buffer.append(indata.copy())
+        if self.is_manual_recording: self.manual_audio_buffer.append(indata.copy())
 
     def _process_manual_audio(self):
         try:
-            full=np.concatenate(self.manual_audio_buffer)
-            self.manual_audio_buffer=[]
-            stream=recognizer.create_stream()
-            stream.accept_waveform(16000,full)
-            recognizer.decode_stream(stream)
-            text=stream.result.text.strip()
-            if text:
-                self.root.after(0,lambda:self.add_chat_message("Вы",f"🎤 {text}"))
-                self.root.after(0,lambda:self._process_manual_command(text))
+            if not self.manual_audio_buffer:
+                self.root.after(0,lambda:self.add_chat_message("Мита",T("no_data"),is_mita=True))
+                self.root.after(0,self._reset_manual_state); return
+            audio=np.concatenate(self.manual_audio_buffer); self.manual_audio_buffer=[]
+            stream=recognizer.create_stream(); stream.accept_waveform(16000,audio); recognizer.decode_stream(stream)
+            recognized_text=stream.result.text.strip()
+            if recognized_text:
+                self.root.after(0,lambda:self.add_chat_message("Вы","🎤 "+recognized_text))
+                self.root.after(0,lambda:self._process_manual_command(recognized_text))
             else:
-                self.root.after(
-                    0,lambda:self.add_chat_message(
-                        "Мита",T("recognition_failed"),is_mita=True
-                    )
-                )
+                self.root.after(0,lambda:self.add_chat_message("Мита",T("recognition_failed"),is_mita=True))
                 self.root.after(0,self._reset_manual_state)
         except Exception as e:
-            self.root.after(
-                0,lambda:self.add_chat_message(
-                    "Мита",T("error_text").format(e),is_mita=True
-                )
-            )
+            self.root.after(0,lambda:self.add_chat_message("Мита",T("error_text").format(e),is_mita=True))
             self.root.after(0,self._reset_manual_state)
 
     def _process_manual_command(self,text):
         self.is_processing=True
-        if self.process_chat_system_command(text):
-            self._reset_manual_state()
-            return
-        if _mita_mode in [MODE_AI,MODE_ALL]:
-            response=ask_groq_chat(text,self.chat_history)
-            self.add_chat_message("Мита",response,is_mita=True)
-            self.chat_history.append({"role":"assistant","content":response})
-            speak(response)
-        else:
-            response=T("command_not_found")
-            self.add_chat_message("Мита",response,is_mita=True)
-            speak(response)
+        try:
+            result=None
+            if _mita_mode in [MODE_SYSTEM,MODE_ALL]:
+                result=self.process_chat_system_command(text)
+                if result:
+                    self.add_chat_message("Мита",result,is_mita=True); speak(result); self._reset_manual_state(); return
+            if _mita_mode in [MODE_AI,MODE_ALL]:
+                response=ask_groq_chat(text,self.chat_history)
+                self.add_chat_message("Мита",response,is_mita=True)
+                self.chat_history.append({"role":"assistant","content":response}); speak(response)
+            elif not result:
+                self.add_chat_message("Мита",T("command_not_found"),is_mita=True); speak(T("command_not_found"))
+        except Exception as e:
+            self.add_chat_message("Мита",T("error_text").format(e),is_mita=True)
         self._reset_manual_state()
 
     def _reset_manual_state(self):
-        self.is_processing=False
-        self.is_manual_recording=False
-        self.manual_audio_buffer=[]
-        self.manual_record_button.config(
-            text=T("manual_input_btn"),bg=self.colors["primary"]
-        )
-        self.canvas.itemconfig(
-            self.status_text,text=T("ready"),fill=self.colors["primary2"]
-        )
-        self.canvas.itemconfig(self.status_sub,text=T("waiting"))
+        self.is_processing=False; self.is_manual_recording=False; self.manual_audio_buffer=[]
+        self.manual_record_button.config(text=T("manual_input_btn"),bg=self.colors["primary"],fg="white")
 
-    # --------------------- chat ---------------------
+    # -------------------- music --------------------
 
-    def show_input_menu(self,event):
-        menu=Menu(
-            self.root,tearoff=0,bg=self.colors["panel2"],
-            fg=self.colors["text"],activebackground=self.colors["primary"]
-        )
-        menu.add_command(label="✂ Вырезать",command=self.cut_input_text)
-        menu.add_command(label="📋 Копировать",command=self.copy_input_text)
-        menu.add_command(label="📎 Вставить",command=self.paste_input_text)
-        menu.add_command(label="⌁ Выделить всё",command=self.select_all_input)
-        menu.post(event.x_root,event.y_root)
-
-    def cut_input_text(self):
-        self.chat_input.event_generate("<<Cut>>")
-
-    def copy_input_text(self):
-        self.chat_input.event_generate("<<Copy>>")
-
-    def paste_input_text(self):
-        self.chat_input.event_generate("<<Paste>>")
-
-    def select_all_input(self):
-        self.chat_input.select_range(0,tk.END)
-        self.chat_input.focus_set()
-        return "break"
-
-    def select_all_chat(self):
-        self.chat_display.config(state=tk.NORMAL)
-        self.chat_display.tag_add(tk.SEL,"1.0",tk.END)
-        self.chat_display.config(state=tk.DISABLED)
-        return "break"
-
-    def show_chat_menu(self,event):
-        self.chat_menu.post(event.x_root,event.y_root)
-
-    def copy_selected_message(self):
-        try:
-            text=self.chat_display.get(tk.SEL_FIRST,tk.SEL_LAST).strip()
-        except tk.TclError:
-            text=""
-        if not text:
-            content=self.chat_display.get("1.0",tk.END).strip()
-            if content:
-                text=content
-        if text:
-            self.root.clipboard_clear()
-            self.root.clipboard_append(text)
-            self.root.update()
-            self.show_temp_status(T("copy_success"))
-        else:
-            self.show_temp_status(T("copy_failed"))
-
-    def copy_all_chat(self):
-        content=self.chat_display.get("1.0",tk.END).strip()
-        if not content:
-            self.show_temp_status(T("chat_empty"))
-            return
-        self.root.clipboard_clear()
-        self.root.clipboard_append(content)
-        self.root.update()
-        self.show_temp_status(T("copy_all_success"))
-
-    def clear_chat(self):
-        if messagebox.askyesno(
-            "Очистка чата" if UI_LANGUAGE=="ru" else "Очищення чату",
-            T("clear_confirm")
-        ):
-            self.chat_display.config(state=tk.NORMAL)
-            self.chat_display.delete("1.0",tk.END)
-            self.chat_display.config(state=tk.DISABLED)
-            self.chat_history=[]
-            self.add_chat_message(
-                "Мита",T("chat_cleared"),is_mita=True
+    def update_music_button(self,is_playing):
+        if hasattr(self,"music_stop_button"):
+            self.music_stop_button.config(
+                text=T("music_stop_click") if is_playing else T("music_stop"),
+                bg=self.colors["danger"] if is_playing else self.colors["panel3"],
+                fg="white" if is_playing else self.colors["text"],
+                state=tk.NORMAL if is_playing else tk.DISABLED
             )
-
-    def add_chat_message(self,sender,message,is_mita=False):
-        message=re.sub(r"[\*_`]","",str(message or ""))
-        self.chat_display.config(state=tk.NORMAL)
-        stamp=datetime.now().strftime("%H:%M")
-        if is_mita:
-            self.chat_display.insert(
-                tk.END,f"◆ МИТА  {stamp}\n","mita_name"
-            )
-            self.chat_display.insert(
-                tk.END,f"{message}\n\n","mita_text"
-            )
-        else:
-            self.chat_display.insert(
-                tk.END,f"◇ ВЫ  {stamp}\n","user_name"
-            )
-            self.chat_display.insert(
-                tk.END,f"{message}\n\n","user_text"
-            )
-        self.chat_display.tag_config(
-            "mita_name",foreground=self.colors["cyan"],
-            font=("Arial",8,"bold")
-        )
-        self.chat_display.tag_config(
-            "mita_text",foreground="#d7deee",font=("Arial",8)
-        )
-        self.chat_display.tag_config(
-            "user_name",foreground=self.colors["primary2"],
-            font=("Arial",8,"bold")
-        )
-        self.chat_display.tag_config(
-            "user_text",foreground=self.colors["text"],font=("Arial",8)
-        )
-        self.chat_display.see(tk.END)
-        self.chat_display.config(state=tk.DISABLED)
-
-    def send_chat_message(self):
-        msg=self.chat_input.get().strip()
-        if not msg:
-            return
-        self.chat_input.delete(0,tk.END)
-        self.add_chat_message("Вы",msg)
-        self.chat_history.append({"role":"user","content":msg})
-        self.set_processing(True)
-        threading.Thread(
-            target=self.process_chat_command,args=(msg,),daemon=True
-        ).start()
-
-    def process_chat_command(self,message):
-        try:
-            if _mita_mode in [MODE_SYSTEM,MODE_ALL]:
-                result=self.process_chat_system_command(message)
-                if result and _mita_mode==MODE_SYSTEM:
-                    self.root.after(
-                        0,lambda:self.add_chat_message(
-                            "Мита",result,is_mita=True
-                        )
-                    )
-                    self.root.after(0,lambda:self.set_processing(False))
-                    return
-            if _mita_mode in [MODE_AI,MODE_ALL]:
-                if _mita_mode==MODE_AI or not result:
-                    response=ask_groq_chat(message,self.chat_history)
-                    self.root.after(
-                        0,lambda r=response:self.add_chat_message(
-                            "Мита",r,is_mita=True
-                        )
-                    )
-                    self.chat_history.append(
-                        {"role":"assistant","content":response}
-                    )
-                    speak(response)
-            elif not result:
-                response=T("command_not_found")
-                self.root.after(
-                    0,lambda:self.add_chat_message(
-                        "Мита",response,is_mita=True
-                    )
-                )
-                speak(response)
-        except Exception as e:
-            self.root.after(
-                0,lambda:self.add_chat_message(
-                    "Мита",T("error_text").format(e),is_mita=True
-                )
-            )
-        self.root.after(0,lambda:self.set_processing(False))
-
-    def process_chat_system_command(self,text):
-        cleaned=text.lower().strip()
-        if process_music_command(cleaned,self):
-            return "🎵 Команда музыки принята"
-
-        # Быстрые системные команды.
-        if "все окна" in cleaned or "сверни все" in cleaned:
-            minimize_all_windows()
-            return T("minimized_all")
-
-        if "смени язык" in cleaned or "поменяй язык" in cleaned or "зміни мову" in cleaned:
-            change_language()
-            return T("language_changed")
-
-        if "скриншот" in cleaned or "скрин" in cleaned:
-            pyautogui.press("printscreen")
-            return T("screenshot_done")
-
-        if "скопируй" in cleaned or "скопіюй" in cleaned:
-            keyboard.press_and_release("ctrl+c")
-            return T("copied")
-
-        if "вставь" in cleaned or "встав" in cleaned:
-            keyboard.press_and_release("ctrl+v")
-            return T("pasted")
-
-        # Напечатать
-        words=cleaned.split()
-        for verb in WRITE_VERBS:
-            if verb in words:
-                idx=words.index(verb)
-                text_to_type=" ".join(words[idx+1:]).strip()
-                if text_to_type:
-                    if _text_corrector_enabled:
-                        text_to_type=correct_text(text_to_type)
-                    keyboard.write(text_to_type,delay=.01)
-                    return T("typing")
-
-        # Перемещение окна
-        for verb in MOVE_VERBS:
-            if verb in cleaned:
-                monitor=2 if any(x in cleaned for x in ["2","второй","два","другий"]) else 1
-                target=cleaned.replace(verb,"").strip()
-                for w in ["на","в","экран","монитор","1","2","первый","второй","один","два","перший","другий"]:
-                    target=target.replace(w," ").strip()
-                if target:
-                    return (
-                        T("moving_window").format(monitor)
-                        if move_window_to_monitor(target,monitor)
-                        else T("move_failed")
-                    )
-                return T("move_to_monitor_ask")
-
-        # Запуск приложения
-        for verb in APP_VERBS:
-            if verb in cleaned:
-                target=cleaned.replace(verb,"").strip()
-                if target:
-                    return (
-                        T("app_launching").format(target)
-                        if launch_application(target)
-                        else T("app_not_found").format(target)
-                    )
-
-        # Сайт
-        for verb in WEB_VERBS:
-            if verb in cleaned:
-                target=cleaned.replace(verb,"").strip()
-                if target:
-                    open_website(target)
-                    return T("web_opening").format(target)
-
-        # Закрытие
-        for verb in CLOSE_VERBS:
-            if verb in cleaned:
-                target=cleaned.replace(verb,"").strip()
-                if target:
-                    return (
-                        T("app_closing").format(target)
-                        if kill_application(target)
-                        else T("app_close_failed").format(target)
-                    )
-
-        if cleaned in CONTROL_COMMANDS:
-            CONTROL_COMMANDS[cleaned]()
-            return T("executed")
-
-        greetings={
-            "привет":T("hello_response_ru") if UI_LANGUAGE=="ru" else T("hello_response_ua"),
-            "привіт":T("hello_response_ru") if UI_LANGUAGE=="ru" else T("hello_response_ua"),
-            "как дела":T("how_are_you"),
-            "як справи":T("how_are_you"),
-            "ты тут":T("im_here"),
-            "ты здесь":T("im_here"),
-        }
-        for phrase,response in greetings.items():
-            if phrase in cleaned:
-                return response
-        return None
-
-    # --------------------- key ---------------------
-
-    def update_key_info(self):
-        # Ключ хранится так же, как в исходной версии.
-        return
-
-    def change_key(self):
-        if messagebox.askyesno(
-            "Смена ключа" if UI_LANGUAGE=="ru" else "Зміна ключа",
-            T("key_change_confirm")
-        ):
-            _clear_saved_key()
-            if KeyLoginWindow(self.root).show():
-                messagebox.showinfo(
-                    "Успешно" if UI_LANGUAGE=="ru" else "Успішно",
-                    T("key_success")
-                )
-
-    def switch_tab(self,idx):
-        self.current_tab=idx
-        for i,(bg,txt) in enumerate(self.nav_items):
-            if i==idx:
-                self.canvas.itemconfig(
-                    bg,fill=self.colors["panel2"],outline=self.colors["line"]
-                )
-                self.canvas.itemconfig(txt,fill=self.colors["text"])
-            else:
-                self.canvas.itemconfig(bg,fill="",outline="")
-                self.canvas.itemconfig(txt,fill=self.colors["muted"])
-
-    def show_temp_status(self,text):
-        self.canvas.itemconfig(self.status_sub,text=text)
-        self.root.after(
-            1600,lambda:self.canvas.itemconfig(
-                self.status_sub,text=T("waiting")
-            )
-        )
-
-    def on_volume_change(self,value):
-        set_music_volume(int(float(value)))
-        self.update_volume_display()
 
     def stop_music_click(self):
         stop_music()
+        self.add_chat_message("Мита",T("music_stopped_click"),is_mita=True)
         self.update_music_button(False)
-        self.add_chat_message(
-            "Мита",T("music_stopped_click"),is_mita=True
-        )
         speak(T("music_stopped_voice"),force=True)
 
+    def on_volume_change(self,value):
+        set_music_volume(int(float(value))); self.update_volume_display()
+
+    def update_volume_display(self):
+        if hasattr(self,"volume_scale"): self.volume_scale.set(_music_volume)
+        if hasattr(self,"volume_label"): self.volume_label.config(text=f"🔊 {T('volume')}: {_music_volume}%")
+        if self.music_mode: self.status_text.config(text=f"♫  МУЗЫКА ИГРАЕТ  •  {_music_volume}%")
+
+    # -------------------- chat helpers --------------------
+
+    def show_input_menu(self,event):
+        try:self.input_menu.post(event.x_root,event.y_root)
+        except:pass
+    def cut_input_text(self):
+        try:self.chat_input.event_generate("<<Cut>>")
+        except:pass
+    def copy_input_text(self):
+        try:self.chat_input.event_generate("<<Copy>>"); self.show_temp_status(T("copy_success"))
+        except:pass
+    def paste_input_text(self):
+        try:self.chat_input.event_generate("<<Paste>>"); self.show_temp_status(T("pasted"))
+        except:pass
+    def clear_input_text(self):
+        self.chat_input.delete(0,tk.END)
+    def select_all_input(self):
+        self.chat_input.select_range(0,tk.END); self.chat_input.focus_set(); return "break"
+    def show_temp_status(self,text):
+        if hasattr(self,"status_sub"):
+            self.status_sub.config(text=text)
+            if self._toast_after:
+                try:self.root.after_cancel(self._toast_after)
+                except:pass
+            self._toast_after=self.root.after(1500,lambda:self.status_sub.config(text=T("waiting")))
+
+    def select_all_chat(self):
+        self.chat_display.config(state=tk.NORMAL); self.chat_display.tag_add(tk.SEL,"1.0",tk.END)
+        self.chat_display.config(state=tk.DISABLED); return "break"
+    def show_chat_menu(self,event):
+        try:self.chat_menu.post(event.x_root,event.y_root)
+        except:pass
+
+    def copy_selected_message(self):
+        try:
+            selected=self.chat_display.get(tk.SEL_FIRST,tk.SEL_LAST).strip()
+            if not selected: raise tk.TclError()
+            self.root.clipboard_clear(); self.root.clipboard_append(selected); self.root.update()
+            self.show_temp_status(T("copy_success")); return
+        except: pass
+        self.copy_all_chat()
+
+    def copy_all_chat(self):
+        try:
+            content=self.chat_display.get("1.0",tk.END).strip()
+            if not content: self.show_temp_status(T("chat_empty")); return
+            self.root.clipboard_clear(); self.root.clipboard_append(content); self.root.update()
+            self.show_temp_status(T("copy_all_success"))
+        except Exception as e:self.show_temp_status(T("error_text").format(e))
+
+    def clear_chat(self):
+        if messagebox.askyesno("Очистка чата",T("clear_confirm")):
+            self.chat_display.config(state=tk.NORMAL); self.chat_display.delete("1.0",tk.END); self.chat_display.config(state=tk.DISABLED)
+            self.chat_history=[]
+            self.add_chat_message("Мита",T("chat_cleared"),is_mita=True)
+
+    def add_chat_message(self,sender,message,is_mita=False):
+        if not hasattr(self,"chat_display"): return
+        if is_mita: message=re.sub(r"[\*_`]","",str(message)); message=re.sub(r"\s+"," ",message).strip()
+        self.chat_display.config(state=tk.NORMAL)
+        timestamp=datetime.now().strftime("%H:%M")
+        if is_mita:
+            self.chat_display.insert(tk.END,f"🌸 Мита  •  {timestamp}\n","mita_name")
+            self.chat_display.insert(tk.END,f"{message}\n\n","mita_text")
+        else:
+            self.chat_display.insert(tk.END,f"👤 Вы  •  {timestamp}\n","user_name")
+            self.chat_display.insert(tk.END,f"{message}\n\n","user_text")
+        self.chat_display.see(tk.END); self.chat_display.config(state=tk.DISABLED)
+        if hasattr(self,"chat_counter"):
+            try:
+                count=int(self.chat_display.get("1.0",tk.END).count("\n\n"))
+                self.chat_counter.config(text=f"{count} сообщений")
+            except:pass
+
+    def send_chat_message(self):
+        message=self.chat_input.get().strip()
+        if not message:return
+        self.chat_input.delete(0,tk.END); self.add_chat_message("Вы",message)
+        self.chat_history.append({"role":"user","content":message})
+        self.is_processing=True
+        threading.Thread(target=self.process_chat_command,args=(message,),daemon=True).start()
+
+    def process_chat_command(self,message):
+        try:
+            result=None
+            if _mita_mode in [MODE_SYSTEM,MODE_ALL]:
+                result=self.process_chat_system_command(message)
+                if result and _mita_mode==MODE_SYSTEM:
+                    self.root.after(0,lambda:self.add_chat_message("Мита",result,is_mita=True))
+                    speak(result); self.is_processing=False; return
+            if _mita_mode in [MODE_AI,MODE_ALL]:
+                if _mita_mode==MODE_AI or not result:
+                    response=ask_groq_chat(message,self.chat_history)
+                    self.root.after(0,lambda:self.add_chat_message("Мита",response,is_mita=True))
+                    self.chat_history.append({"role":"assistant","content":response}); speak(response)
+            elif not result:
+                self.root.after(0,lambda:self.add_chat_message("Мита",T("command_not_found"),is_mita=True))
+                speak(T("command_not_found"))
+        except Exception as e:
+            self.root.after(0,lambda:self.add_chat_message("Мита",T("error_text").format(e),is_mita=True))
+        self.is_processing=False
+
+    def process_chat_system_command(self,text):
+        cleaned=text.lower().strip()
+        if process_music_command(cleaned,self): return "🎵 "+T("processing_sub")
+        if "громкость" in cleaned or "гучн" in cleaned: return T("volume_text").format(_music_volume)
+        stop_phrases=["хватит","стоп","прекрати","замолчи","перестань","остановись","тихо","досить","припини","замовкни","зупинись"]
+        if any(p in cleaned for p in stop_phrases):
+            stop_tts()
+            if not self.tts_muted:self.toggle_tts_mute()
+            return T("shutting_up")
+        if "все окна" in cleaned or "сверни все" in cleaned or "усі вікна" in cleaned or "згорни всі" in cleaned:
+            minimize_all_windows(); return T("minimized_all")
+        if "скриншот" in cleaned or "скрин" in cleaned or "скрін" in cleaned:
+            pyautogui.press("printscreen"); return T("screenshot_done")
+        if "скопируй" in cleaned or "скопіюй" in cleaned:
+            keyboard.press_and_release("ctrl+c"); return T("copied")
+        if "вставь" in cleaned or "встав" in cleaned:
+            keyboard.press_and_release("ctrl+v"); return T("pasted")
+        write_verbs=['напиши','напечатай','пиши','печатай','напишіть','надрукуй','друкуй']
+        for verb in write_verbs:
+            if verb in cleaned:
+                target=cleaned.split(verb,1)[1].strip()
+                if target:
+                    if _text_corrector_enabled: target=correct_text(target)
+                    keyboard.write(target,delay=.02); return T("typing_corrected") if _text_corrector_enabled else T("typed")+target
+        move_verbs=["переведи","перемести","перекинь","отправь","перемісти","відправ"]
+        for verb in move_verbs:
+            if verb in cleaned:
+                monitor=1 if any(x in cleaned for x in ["1","первый","один","перший"]) else 2 if any(x in cleaned for x in ["2","второй","два","другий"]) else None
+                if monitor is None:return T("move_to_monitor_ask")
+                target=cleaned.replace(verb,"").strip()
+                for w in ["на","в","экран","монитор","1","2","первый","второй","один","два","перший","другий","екран","монітор"]:
+                    target=target.replace(w,"").strip()
+                return T("moving_window").format(monitor) if move_window_to_monitor(target,monitor) else T("move_failed")
+        app_verbs=["запусти","запустил","включи","запустить","включить","увімкни","відкрий","відкрити"]
+        for verb in app_verbs:
+            if verb in cleaned:
+                target=cleaned.replace(verb,"").strip()
+                return T("app_launching").format(target) if launch_application(target) else T("app_not_found").format(target)
+        web_verbs=["открой","открыть","перейди","перейти","покажи","відкрий","відкрити"]
+        for verb in web_verbs:
+            if verb in cleaned:
+                target=cleaned.replace(verb,"").strip(); open_website(target); return T("web_opening").format(target)
+        close_verbs=["закрой","закрыть","выключи","выключить","убей","закрий","закрити","вимкни","вимкнути"]
+        for verb in close_verbs:
+            if verb in cleaned:
+                target=cleaned.replace(verb,"").strip()
+                return T("app_closing").format(target) if kill_application(target) else T("app_close_failed").format(target)
+        if cleaned in CONTROL_COMMANDS:
+            CONTROL_COMMANDS[cleaned](); return T("executed")
+        greetings={"ты тут":T("im_here"),"ты здесь":T("im_here"),"привет":T("hello_response_ru") if UI_LANGUAGE=="ru" else T("hello_response_ua"),
+                   "привіт":T("hello_response_ru") if UI_LANGUAGE=="ru" else T("hello_response_ua"),
+                   "как дела":T("how_are_you"),"як справи":T("how_are_you"),
+                   "не спишь":T("im_always_here"),"не спиш":T("im_always_here")}
+        for g,v in greetings.items():
+            if g in cleaned:return v
+        return None
+
+    # -------------------- key / voice state --------------------
+
+    def update_key_info(self):
+        saved_key=_get_saved_key()
+        text=T("no_key"); color=self.colors["danger"]
+        if saved_key:
+            db=_load_json_file(KEY_DB_FILE); info=db.get(saved_key)
+            if info:
+                remaining=float(info["expires_at"])-time.time()
+                if remaining>0:
+                    key_display=saved_key[:8]+"..." if len(saved_key)>8 else saved_key
+                    text=f"🔑 {key_display}  •  {_remaining_text(remaining)}"; color=self.colors["green"]
+        if hasattr(self,"key_info_label"): self.key_info_label.config(text=text,fg=color)
+        if hasattr(self,"settings_key_label"): self.settings_key_label.config(text=text,fg=color)
+        self.root.after(10000,self.update_key_info)
+
+    def change_key(self):
+        if messagebox.askyesno("Смена ключа",T("key_change_confirm")):
+            _clear_saved_key()
+            if KeyLoginWindow(self.root).show():
+                self.update_key_info()
+                messagebox.showinfo("Успешно",T("key_success"))
+            else:self.update_key_info()
+
+    def set_listening(self,listening):
+        self.is_listening=bool(listening)
+
+    def set_processing(self,processing):
+        self.is_processing=bool(processing)
+
+    def show_command(self,text):
+        if hasattr(self,"status_sub"):
+            self.status_sub.config(text=f"⌘ {text[:60]}")
+
+    # -------------------- lifecycle --------------------
+
+    def get_ram_usage(self):
+        try:return int(psutil.Process().memory_info().rss/1024/1024)
+        except:return 0
+
+    def fade_in(self):
+        try:
+            a=float(self.root.attributes("-alpha"))
+            if a<1:
+                self.root.attributes("-alpha",min(1,a+.08)); self.root.after(25,self.fade_in)
+        except:
+            try:self.root.attributes("-alpha",1.0)
+            except:pass
+
     def quit(self):
+        if not self.running:return
         self.running=False
+        try:self.audio_monitor.stop()
+        except:pass
+        try:stop_tts()
+        except:pass
+        try:stop_music()
+        except:pass
         try:
-            self.audio_monitor.stop()
-        except Exception:
-            pass
-        try:
-            stop_music()
-        except Exception:
-            pass
-        try:
-            if HAS_EDGE_TTS and _tts_pygame_ready:
-                pygame.mixer.music.stop()
-                pygame.mixer.quit()
-        except Exception:
-            pass
-        try:
-            if _vlc_instance is not None:
-                _vlc_instance.release()
-        except Exception:
-            pass
-        try:
-            self.root.destroy()
-        except Exception:
-            pass
+            if _vlc_instance is not None:_vlc_instance.release()
+        except:pass
+        try:self.root.destroy()
+        except:pass
 
     def run(self):
         self.root.mainloop()
 
 
-def type_corrected_text(original_text: str, interface=None):
-    if not _text_corrector_enabled:
-        if interface:
-            interface.add_chat_message("Мита", T("typing_writing").format(original_text), is_mita=True)
-        time.sleep(0.2)
-        keyboard.write(original_text, delay=0.02)
-        return original_text
-    corrected = correct_text(original_text)
-    if interface and corrected != original_text:
-        msg = T("typing_corrected_msg").format(original_text, corrected)
-        interface.add_chat_message("Мита", msg, is_mita=True)
-        speak(T("corrector_on_text"), force=True)
-    elif interface:
-        interface.add_chat_message("Мита", T("typing_writing").format(corrected), is_mita=True)
-    time.sleep(0.3)
-    keyboard.write(corrected, delay=0.02)
-    return corrected
-
-
-# ============================================================
-# ГОЛОСОВОЙ ПОТОК
-# ============================================================
-
 def voice_assistant_thread(interface, recognizer, audio_queue, sample_rate, ENERGY_THRESHOLD, SILENCE_LIMIT):
     word_buffer = []
     silence_counter = 0
     is_speaking = False
-
 
     with sd.InputStream(
             samplerate=sample_rate,
@@ -3543,6 +3303,22 @@ def main():
     if not os.path.exists(SOUNDS_DIR):
         os.makedirs(SOUNDS_DIR)
         print(f"📁 Создана папка для звуков: {SOUNDS_DIR}")
+
+    # СОЗДАНИЕ ПАПКИ ДЛЯ COOKIES
+    if not os.path.exists(COOKIES_DIR):
+        try:
+            os.makedirs(COOKIES_DIR)
+            print(f"📁 Создана папка для cookies: {COOKIES_DIR}")
+            print(f"📁 Положите сюда файл cookie.txt для YouTube")
+        except Exception as e:
+            print(f"⚠️ Не удалось создать папку для cookies: {e}")
+
+    # Проверяем наличие cookie.txt
+    if has_cookies():
+        print(f"✅ Найден файл cookies: {get_cookie_path()}")
+    else:
+        print(f"⚠️ Файл cookie.txt не найден в папке YouCookie")
+        print(f"   Чтобы музыка работала, положите cookie.txt в папку YouCookie")
 
     if not require_stella_key():
         sys.exit(0)
