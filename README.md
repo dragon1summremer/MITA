@@ -16,8 +16,8 @@ import sounddevice as sd
 import pygetwindow as gw
 import psutil
 import keyboard
-from tkinter import *
-from tkinter import ttk, scrolledtext, messagebox, Menu, filedialog
+import tkinter as tk
+from tkinter import scrolledtext, ttk, messagebox, Menu, filedialog
 import math
 import sys
 from datetime import datetime, timedelta
