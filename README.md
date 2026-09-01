@@ -17,8 +17,7 @@ import pygetwindow as gw
 import psutil
 import keyboard
 import tkinter as tk
-from tkinter import scrolledtext, ttk, messagebox, Menu
-from tkinter import filedialog
+from tkinter import scrolledtext, ttk, messagebox, Menu, filedialog
 import math
 import sys
 from datetime import datetime, timedelta
