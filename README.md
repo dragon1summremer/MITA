@@ -32,13 +32,11 @@ try:
 except ImportError:
     HAS_YDL = False
 
-
 try:
     import vlc
     HAS_VLC = True
 except ImportError:
     HAS_VLC = False
-
 
 # ============================================================
 # ЕСТЕСТВЕННЫЙ ЖЕНСКИЙ ГОЛОС MITA (Microsoft Edge TTS)
@@ -51,19 +49,38 @@ try:
 except ImportError:
     HAS_EDGE_TTS = False
 
-# Голоса для разных языков
-TTS_VOICE_RU = "ru-RU-SvetlanaNeural"
-TTS_VOICE_UA = "uk-UA-PolinaNeural"
-TTS_VOICE_DEFAULT = TTS_VOICE_RU
+# ============================================================
+# НАСТРОЙКИ ДЛЯ COOKIES YOUTUBE
+# ============================================================
 
-TTS_RATE = "-5%"
-TTS_PITCH = "+2Hz"
-TTS_VOLUME = 1.0
-TTS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)) if "__file__" in globals() else os.getcwd(),
-                        "mita_tts.mp3")
-_tts_lock = threading.Lock()
-_tts_pygame_ready = False
-_tts_stop_requested = False
+def get_base_path():
+    if getattr(sys, 'frozen', False):
+        return os.path.dirname(sys.executable)
+    else:
+        return os.path.dirname(os.path.abspath(__file__))
+
+BASE_DIR = get_base_path()
+
+# Пути для поиска cookies
+COOKIES_DIR = os.path.join(BASE_DIR, "YouCookie")
+COOKIE_FILE = os.path.join(COOKIES_DIR, "cookie.txt")
+COOKIES_FILE = os.path.join(COOKIES_DIR, "cookies.txt")
+
+# Функция поиска cookies
+def find_cookie_file():
+    """Ищет файл cookies в папке YouCookie"""
+    if os.path.exists(COOKIE_FILE) and os.path.getsize(COOKIE_FILE) > 0:
+        return COOKIE_FILE
+    elif os.path.exists(COOKIES_FILE) and os.path.getsize(COOKIES_FILE) > 0:
+        return COOKIES_FILE
+    return None
+
+# Функция проверки наличия cookies
+def has_cookies():
+    return find_cookie_file() is not None
+
+def get_cookie_path():
+    return find_cookie_file()
 
 # ============================================================
 # ПЕРЕМЕННЫЕ ДЛЯ ВИЗУАЛИЗАЦИИ
@@ -84,14 +101,24 @@ _music_volume = 100
 # НАСТРОЙКИ ЯЗЫКА ИНТЕРФЕЙСА
 # ============================================================
 UI_LANGUAGE = "ru"
-UI_LANG_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)) if "__file__" in globals() else os.getcwd(),
-                            "mita_ui_lang.json")
+UI_LANG_FILE = os.path.join(BASE_DIR, "mita_ui_lang.json")
 
+# Голоса для разных языков
+TTS_VOICE_RU = "ru-RU-SvetlanaNeural"
+TTS_VOICE_UA = "uk-UA-PolinaNeural"
+TTS_VOICE_DEFAULT = TTS_VOICE_RU
+
+TTS_RATE = "-5%"
+TTS_PITCH = "+2Hz"
+TTS_VOLUME = 1.0
+TTS_FILE = os.path.join(BASE_DIR, "mita_tts.mp3")
+_tts_lock = threading.Lock()
+_tts_pygame_ready = False
+_tts_stop_requested = False
 
 def get_ui_language():
     global UI_LANGUAGE
     return UI_LANGUAGE
-
 
 def set_ui_language(lang: str):
     global UI_LANGUAGE
@@ -101,14 +128,12 @@ def set_ui_language(lang: str):
         return True
     return False
 
-
 def _save_ui_language():
     try:
         with open(UI_LANG_FILE, "w", encoding="utf-8") as f:
             json.dump({"language": UI_LANGUAGE}, f)
     except:
         pass
-
 
 def _load_ui_language():
     global UI_LANGUAGE
@@ -122,7 +147,6 @@ def _load_ui_language():
     except:
         pass
     UI_LANGUAGE = "ru"
-
 
 # ============================================================
 # ТЕКСТЫ ИНТЕРФЕЙСА НА ДВУХ ЯЗЫКАХ
@@ -261,12 +285,12 @@ def T(key: str) -> str:
         "move_failed": {"ru": "Не удалось переместить", "ua": "Не вдалося перемістити"},
         "window_on_monitor": {"ru": "Окно на {} мониторе", "ua": "Вікно на {} моніторі"},
         "error_text": {"ru": "❌ Ошибка: {}", "ua": "❌ Помилка: {}"},
+        "no_cookies": {"ru": "❌ Нет cookies для YouTube. Положите cookie.txt в папку YouCookie", "ua": "❌ Немає cookies для YouTube. Покладіть cookie.txt в папку YouCookie"},
     }
     result = texts.get(key, {})
     if isinstance(result, dict):
         return result.get(UI_LANGUAGE, result.get("ru", key))
     return result
-
 
 # ============================================================
 # РЕЖИМЫ РАБОТЫ МИТЫ
@@ -276,7 +300,6 @@ MODE_AI = "ai"
 MODE_ALL = "all"
 _mita_mode = MODE_ALL
 
-
 def set_mita_mode(mode: str):
     global _mita_mode
     if mode in [MODE_SYSTEM, MODE_AI, MODE_ALL]:
@@ -284,10 +307,8 @@ def set_mita_mode(mode: str):
         return True
     return False
 
-
 def get_mita_mode():
     return _mita_mode
-
 
 def get_mode_name(mode: str):
     if mode == MODE_SYSTEM:
@@ -296,7 +317,6 @@ def get_mode_name(mode: str):
         return T("mode_ai")
     else:
         return T("mode_all")
-
 
 def detect_user_language(text: str) -> str:
     if not text:
@@ -325,28 +345,23 @@ def detect_user_language(text: str) -> str:
         return "ru"
     return UI_LANGUAGE if UI_LANGUAGE in ["ru", "ua"] else "ru"
 
-
 def get_tts_voice(text: str) -> str:
     if UI_LANGUAGE == "ua":
         return TTS_VOICE_UA
     return TTS_VOICE_RU
-
 
 # ============================================================
 # НАСТРОЙКИ - ИСПРАВИТЕЛЬ ТЕКСТА
 # ============================================================
 _text_corrector_enabled = False
 
-
 def set_text_corrector(enabled: bool):
     global _text_corrector_enabled
     _text_corrector_enabled = enabled
     return _text_corrector_enabled
 
-
 def get_text_corrector():
     return _text_corrector_enabled
-
 
 def correct_text(text: str) -> str:
     if not text or len(text.strip()) < 2:
@@ -389,9 +404,7 @@ def correct_text(text: str) -> str:
                 corrected = corrected.split(prefix)[-1].strip()
         return corrected if corrected else text
     except Exception as e:
-
         return text
-
 
 # ============================================================
 # ФУНКЦИИ ДЛЯ ВОСПРОИЗВЕДЕНИЯ ПЕСЕН (ИСПРАВЛЕННЫЕ)
@@ -404,7 +417,6 @@ _vlc_instance = None
 _vlc_player = None
 _current_track_title = ""
 
-
 def set_music_volume(percent: int):
     global _music_volume, _vlc_player
     _music_volume = max(0, min(200, percent))
@@ -416,11 +428,9 @@ def set_music_volume(percent: int):
             pass
     return False
 
-
 def get_music_volume():
     global _music_volume
     return _music_volume
-
 
 def volume_up(interface=None):
     result = set_music_volume(get_music_volume() + 10)
@@ -431,7 +441,6 @@ def volume_up(interface=None):
         speak(msg, force=True)
     return result
 
-
 def volume_down(interface=None):
     result = set_music_volume(get_music_volume() - 10)
     if interface:
@@ -440,7 +449,6 @@ def volume_down(interface=None):
         interface.add_chat_message("Мита", msg, is_mita=True)
         speak(msg, force=True)
     return result
-
 
 def find_local_music(query: str) -> str:
     music_dir = os.path.join(BASE_DIR, "music")
@@ -465,11 +473,21 @@ def find_local_music(query: str) -> str:
                     return os.path.join(music_dir, file)
     return None
 
-
 def play_youtube_audio(query: str, interface=None):
     global _music_thread, _music_stop, _current_music_file, _vlc_instance, _vlc_player, _current_track_title, _is_music_mode
 
     if not HAS_YDL or not HAS_VLC:
+        if interface:
+            interface.add_chat_message("Мита", "❌ Нет yt-dlp или VLC", is_mita=True)
+        return False
+
+    # Проверяем наличие cookies
+    cookie_path = get_cookie_path()
+    if not cookie_path:
+        msg = T("no_cookies")
+        if interface:
+            interface.add_chat_message("Мита", msg, is_mita=True)
+            speak("Положите файл cookie.txt в папку YouCookie", force=True)
         return False
 
     try:
@@ -493,12 +511,13 @@ def play_youtube_audio(query: str, interface=None):
 
         # Ищем на YouTube с улучшенными настройками
         print(f"[Музыка] Ищу: {clean_query}")
+        print(f"[Музыка] Использую cookies: {cookie_path}")
 
         ydl_opts = {
             'format': 'bestaudio/best',
             'quiet': True,
             'no_warnings': True,
-            'default_search': 'ytsearch10',  # Ищем 10 результатов
+            'default_search': 'ytsearch10',
             'extract_flat': False,
             'noplaylist': True,
             'skip_download': True,
@@ -509,9 +528,10 @@ def play_youtube_audio(query: str, interface=None):
             'cachedir': False,
             'geo_bypass': True,
             'geo_bypass_country': 'US',
+            'cookiefile': cookie_path,  # Используем найденный файл cookies
             'extractor_args': {
                 'youtube': {
-                    'player_client': ['android', 'web'],  # Обход блокировок
+                    'player_client': ['android', 'web'],
                     'player_skip': ['webpage'],
                 }
             }
@@ -525,14 +545,10 @@ def play_youtube_audio(query: str, interface=None):
                 info = ydl.extract_info(f"ytsearch10:{clean_query}", download=False)
                 entries = info.get('entries', []) if 'entries' in info else []
 
-                # Ищем доступное видео
                 for entry in entries:
                     if not entry:
                         continue
-
-                    # Пробуем получить прямой URL через запрос
                     try:
-                        # Проверяем, доступно ли видео
                         test_url = entry.get('url') or entry.get('webpage_url')
                         if test_url:
                             audio_url = test_url
@@ -542,17 +558,13 @@ def play_youtube_audio(query: str, interface=None):
                     except:
                         continue
 
-                # Если не нашли через первый метод, пробуем альтернативный
                 if not audio_url:
-                    # Попробуем использовать другой метод
                     for entry in entries:
                         if not entry:
                             continue
                         try:
-                            # Создаем URL для прямого запроса
                             video_id = entry.get('id')
                             if video_id:
-                                # Используем альтернативный URL
                                 alt_url = f"https://www.youtube.com/watch?v={video_id}"
                                 audio_url = alt_url
                                 title = entry.get('title', 'Песня')
@@ -561,9 +573,7 @@ def play_youtube_audio(query: str, interface=None):
                         except:
                             continue
 
-                # Если все еще нет - пробуем с другим запросом
                 if not audio_url:
-                    # Убираем лишние слова из запроса
                     words = clean_query.split()
                     if len(words) > 3:
                         short_query = ' '.join(words[:3])
@@ -577,6 +587,11 @@ def play_youtube_audio(query: str, interface=None):
 
             except Exception as e:
                 print(f"[Музыка] Ошибка поиска: {e}")
+                if "Sign in to confirm" in str(e) or "cookies" in str(e).lower():
+                    if interface:
+                        msg = "⚠️ Нужно обновить cookies для YouTube. Положите свежий cookie.txt в папку YouCookie"
+                        interface.add_chat_message("Мита", msg, is_mita=True)
+                        speak(msg, force=True)
                 return False
 
         if not audio_url:
@@ -593,7 +608,6 @@ def play_youtube_audio(query: str, interface=None):
     except Exception as e:
         print(f"[Ошибка музыки]: {e}")
         return False
-
 
 def _play_audio_vlc(audio_url: str, title: str, interface=None):
     global _music_thread, _music_stop, _vlc_instance, _vlc_player, _is_music_mode, _music_volume
@@ -617,11 +631,10 @@ def _play_audio_vlc(audio_url: str, title: str, interface=None):
         if _vlc_player.play() == -1:
             raise Exception("VLC не смог открыть аудиопоток")
 
-        # Мониторинг воспроизведения
         def monitor():
             global _music_stop, _vlc_player, _is_music_mode, _music_intensity
             started = False
-            deadline = time.time() + 60  # 60 секунд на старт
+            deadline = time.time() + 60
 
             while not _music_stop:
                 player = _vlc_player
@@ -638,7 +651,6 @@ def _play_audio_vlc(audio_url: str, title: str, interface=None):
                 elif started and state in (vlc.State.Ended, vlc.State.Stopped, vlc.State.Error):
                     break
                 elif not started and time.time() > deadline:
-                    # Пробуем перезапустить
                     try:
                         player.stop()
                         player.play()
@@ -670,7 +682,6 @@ def _play_audio_vlc(audio_url: str, title: str, interface=None):
         print(f"[Ошибка VLC]: {e}")
         return False
 
-
 def stop_music():
     global _music_stop, _vlc_player, _is_music_mode, _music_intensity
     _music_stop = True
@@ -685,13 +696,11 @@ def stop_music():
     _vlc_player = None
     return True
 
-
 def is_music_playing():
     try:
         return _vlc_player is not None and _vlc_player.get_state() == vlc.State.Playing
     except Exception:
         return False
-
 
 def process_music_command(text: str, interface) -> bool:
     global _music_volume
@@ -741,20 +750,16 @@ def process_music_command(text: str, interface) -> bool:
                 parts = cleaned.split(keyword, 1)
                 if len(parts) > 1:
                     song_name = parts[1].strip()
-                    # Убираем лишние слова
                     for word in ['мита', 'стелла', 'пожалуйста', 'сейчас', 'міта', 'будь-ласка', 'зараз']:
                         song_name = song_name.replace(word, '').strip()
                     break
 
         if song_name and len(song_name) > 2:
-            # Показываем что ищем
             interface.add_chat_message("Мита", f"🎵 Ищу: {song_name}", is_mita=True)
-            # Запускаем в отдельном потоке
             threading.Thread(target=play_youtube_audio, args=(song_name, interface), daemon=True).start()
             return True
 
     return False
-
 
 # ============================================================
 # TTS ФУНКЦИИ
@@ -865,7 +870,6 @@ def speak(text: str, force: bool = False):
     threading.Thread(target=worker, daemon=True).start()
     return True
 
-
 def stop_tts():
     global _tts_stop_requested
     _tts_stop_requested = True
@@ -877,14 +881,12 @@ def stop_tts():
         pass
     return False
 
-
 # ============================================================
 # GROQ API
 # ============================================================
 
 GROQ_API_KEY = "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"
 client = Groq(api_key=GROQ_API_KEY)
-
 
 def ask_groq(question):
     try:
@@ -909,7 +911,6 @@ def ask_groq(question):
         return completion.choices[0].message.content
     except Exception as e:
         return T("error_text").format(e)
-
 
 def ask_groq_chat(question, chat_history=None):
     try:
@@ -937,19 +938,10 @@ def ask_groq_chat(question, chat_history=None):
     except Exception as e:
         return T("error_text").format(e)
 
-
 # ============================================================
 # КЛЮЧИ И АВТОРИЗАЦИЯ
 # ============================================================
 
-def get_base_path():
-    if getattr(sys, 'frozen', False):
-        return os.path.dirname(sys.executable)
-    else:
-        return os.path.dirname(os.path.abspath(__file__))
-
-
-BASE_DIR = get_base_path()
 SOUNDS_DIR = os.path.join(BASE_DIR, "sounds")
 JSON_CACHE_FILE = os.path.join(BASE_DIR, "saveAppPty.json")
 
@@ -963,7 +955,6 @@ KEY_TABLE = {
     "STELLA-1WEEK": {"seconds": 604800, "created_at": "2026-08-30 12:00:00"},
 }
 
-
 def _load_json_file(path):
     try:
         if os.path.exists(path):
@@ -973,7 +964,6 @@ def _load_json_file(path):
         pass
     return {}
 
-
 def _save_json_file(path, data):
     try:
         with open(path, "w", encoding="utf-8") as f:
@@ -981,7 +971,6 @@ def _save_json_file(path, data):
         return True
     except Exception:
         return False
-
 
 def _remaining_text(seconds):
     seconds = max(0, int(seconds))
@@ -992,7 +981,6 @@ def _remaining_text(seconds):
     if h: return f"{h}ч {m}м"
     if m: return f"{m}м {s}с"
     return f"{s}с"
-
 
 def _build_key_db():
     db = _load_json_file(KEY_DB_FILE)
@@ -1012,7 +1000,6 @@ def _build_key_db():
         _save_json_file(KEY_DB_FILE, db)
     return db
 
-
 def _get_saved_key():
     saved = _load_json_file(ACTIVATED_KEY_FILE)
     key = str(saved.get("key", "")).strip().upper()
@@ -1024,10 +1011,8 @@ def _get_saved_key():
         return None
     return key
 
-
 def _remember_key(key):
     _save_json_file(ACTIVATED_KEY_FILE, {"key": key, "saved_at": time.time()})
-
 
 def _clear_saved_key():
     if os.path.exists(ACTIVATED_KEY_FILE):
@@ -1037,7 +1022,6 @@ def _clear_saved_key():
         except:
             pass
     return False
-
 
 def validate_stella_key(key):
     key = key.strip().upper()
@@ -1054,7 +1038,6 @@ def validate_stella_key(key):
     _save_json_file(KEY_DB_FILE, db)
     _remember_key(key)
     return True, f"Ключ принят • осталось {_remaining_text(remaining)}"
-
 
 # ============================================================
 # ОКНО ВЫБОРА РЕЖИМА ПРИ ЗАПУСКЕ
@@ -1183,7 +1166,6 @@ class ModeSelectionWindow:
         self.root.mainloop()
         return self.result
 
-
 def get_saved_mode():
     try:
         pref_file = os.path.join(BASE_DIR, "mita_mode_pref.json")
@@ -1195,7 +1177,6 @@ def get_saved_mode():
     except:
         pass
     return None
-
 
 # ============================================================
 # КЛАСС КЛЮЧЕВОГО ОКНА
@@ -1263,13 +1244,11 @@ class KeyLoginWindow:
         self.root.mainloop()
         return self.result
 
-
 def require_stella_key(parent=None):
     _build_key_db()
     if _get_saved_key():
         return True
     return KeyLoginWindow(parent).show()
-
 
 # ============================================================
 # СИСТЕМНЫЙ АУДИО МОНИТОР
@@ -1349,7 +1328,6 @@ class SystemAudioMonitor:
                     time.sleep(0.03)
         except Exception as e:
             print(f"[Audio Fallback Error]: {e}")
-
 
 # ============================================================
 # ОСНОВНОЙ ИНТЕРФЕЙС
@@ -2989,7 +2967,6 @@ def voice_assistant_thread(interface, recognizer, audio_queue, sample_rate, ENER
     silence_counter = 0
     is_speaking = False
 
-
     with sd.InputStream(
             samplerate=sample_rate,
             channels=1,
@@ -3725,6 +3702,22 @@ def main():
     if not os.path.exists(SOUNDS_DIR):
         os.makedirs(SOUNDS_DIR)
         print(f"📁 Создана папка для звуков: {SOUNDS_DIR}")
+
+    # СОЗДАНИЕ ПАПКИ ДЛЯ COOKIES
+    if not os.path.exists(COOKIES_DIR):
+        try:
+            os.makedirs(COOKIES_DIR)
+            print(f"📁 Создана папка для cookies: {COOKIES_DIR}")
+            print(f"📁 Положите сюда файл cookie.txt для YouTube")
+        except Exception as e:
+            print(f"⚠️ Не удалось создать папку для cookies: {e}")
+
+    # Проверяем наличие cookie.txt
+    if has_cookies():
+        print(f"✅ Найден файл cookies: {get_cookie_path()}")
+    else:
+        print(f"⚠️ Файл cookie.txt не найден в папке YouCookie")
+        print(f"   Чтобы музыка работала, положите cookie.txt в папку YouCookie")
 
     if not require_stella_key():
         sys.exit(0)
