@@ -1,19 +1,5 @@
-import os
-import sys
-import requests
-
-# Фейковые импорты, чтобы PyInstaller зашил их внутрь EXE
-import bs4
-import difflib
-import keyboard
-import pyautogui
-import pygame
-import pyttsx3
-from comtypes import CLSCTX_ALL
-from pycaw.pycaw import AudioUtilities, IAudioEndpointVolume
-
-# Дополнительные библиотеки из основного скрипта
 import json
+import os
 import queue
 import random
 import re
@@ -24,16 +10,19 @@ import threading
 import webbrowser
 import winreg
 import numpy as np
+import pyautogui
 import sherpa_onnx
 import sounddevice as sd
-import soundfile as sf
 import pygetwindow as gw
 import psutil
+import keyboard
 import tkinter as tk
 from tkinter import scrolledtext, ttk, messagebox, Menu
 import math
+import sys
 from datetime import datetime, timedelta
 from groq import Groq
+
 # ============================================================
 # ДОПОЛНИТЕЛЬНЫЕ ИМПОРТЫ ДЛЯ ВОСПРОИЗВЕДЕНИЯ МУЗЫКИ
 # ============================================================
@@ -678,7 +667,7 @@ def _play_audio_vlc(audio_url: str, title: str, interface=None):
         return True
 
     except Exception as e:
-
+        print(f"[Ошибка VLC]: {e}")
         return False
 
 
@@ -871,7 +860,7 @@ def speak(text: str, force: bool = False):
                     time.sleep(0.03)
 
             except Exception as e:
-
+                print(f"[TTS Error]: {e}")
 
     threading.Thread(target=worker, daemon=True).start()
     return True
@@ -1331,7 +1320,7 @@ class SystemAudioMonitor:
                             self.audio_data.pop(0)
                     time.sleep(0.03)
         except Exception as e:
-
+            print(f"[Audio Monitor Error]: {e}")
             self._fallback_monitor()
 
     def _audio_callback(self, indata, frames, time, status):
@@ -1359,7 +1348,7 @@ class SystemAudioMonitor:
                             self.audio_data.pop(0)
                     time.sleep(0.03)
         except Exception as e:
-
+            print(f"[Audio Fallback Error]: {e}")
 
 
 # ============================================================
@@ -2091,7 +2080,7 @@ class MisideInterface:
                 while self.is_manual_recording:
                     time.sleep(0.05)
         except Exception as e:
-
+            print(f"[Manual Record Error]: {e}")
             self.root.after(0, lambda: self.add_chat_message("Мита", T("error_text").format(e), is_mita=True))
             self.root.after(0, lambda: self.manual_record_button.config(
                 text=T("manual_input_btn"), bg="#ff5caa", fg="white"))
@@ -3000,8 +2989,7 @@ def voice_assistant_thread(interface, recognizer, audio_queue, sample_rate, ENER
     silence_counter = 0
     is_speaking = False
 
-
-
+ 
     with sd.InputStream(
             samplerate=sample_rate,
             channels=1,
@@ -3570,14 +3558,14 @@ def process_command(text: str, interface):
 
     if _mita_mode in [MODE_AI, MODE_ALL]:
         if _mita_mode == MODE_AI or not system_response:
-            print("[Стелла]: Обращаюсь к MITA AI")
+            print("[Стелла]: Обращаюсь к ИИ...")
             try:
                 response = ask_groq(phrase)
                 print(f"[Стелла]: {response}")
                 interface.add_chat_message("Мита", response, is_mita=True)
                 speak(response)
             except Exception as e:
-
+                print(f"[Ошибка Groq]: {e}")
                 interface.add_chat_message("Мита", T("error_text").format(e), is_mita=True)
     else:
         if not system_response:
@@ -3730,13 +3718,13 @@ def main():
     if not os.path.exists(music_dir):
         try:
             os.makedirs(music_dir)
-
+            print(f"📁 Создана папка для музыки: {music_dir}")
         except:
             pass
 
     if not os.path.exists(SOUNDS_DIR):
         os.makedirs(SOUNDS_DIR)
-
+        print(f"📁 Создана папка для звуков: {SOUNDS_DIR}")
 
     if not require_stella_key():
         sys.exit(0)
