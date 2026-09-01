@@ -1047,21 +1047,111 @@ def validate_stella_key(key):
 # ОКНО ВЫБОРА РЕЖИМА ПРИ ЗАПУСКЕ
 # ============================================================
 
+
+class CyberButton(tk.Canvas):
+    """Canvas-based modern beveled button with hover/glow and Tk-like config()."""
+    def __init__(self, master, text="", command=None, accent=False, danger=False,
+                 width=None, height=38, **kwargs):
+        self.command = command
+        self.text = str(text)
+        self.state = tk.NORMAL
+        self.accent = accent
+        self.danger = danger
+        self._hover = False
+        self._custom_bg = None
+        self._custom_fg = None
+        self._base_bg = "#081923"
+        self._panel = "#06151e"
+        self._line = "#0d4e66"
+        self._cyan = "#19cfff"
+        self._cyan2 = "#7be9ff"
+        self._green = "#00f59a"
+        self._amber = "#ffb52e"
+        reqw = 150 if width is None else max(90, int(width)*9)
+        super().__init__(master, width=reqw, height=height, bg=master.cget("bg"),
+                         highlightthickness=0, bd=0, relief="flat", cursor="hand2")
+        self._h = height
+        self.bind("<Configure>", lambda e: self._draw())
+        self.bind("<Enter>", self._enter)
+        self.bind("<Leave>", self._leave)
+        self.bind("<Button-1>", self._click)
+        self.bind("<ButtonRelease-1>", lambda e: self._draw())
+        self._draw()
+
+    def _palette(self):
+        if self.state == tk.DISABLED:
+            return "#061017", "#0a2a37", "#42616d", "#0b2632"
+        if self._custom_bg:
+            bg = self._custom_bg
+            border = self._cyan if bg not in ("#ffb020", "#ffb52e") else self._amber
+            fg = self._custom_fg or "#e9fbff"
+            glow = "#103b4b"
+            return bg, border, fg, glow
+        if self.danger:
+            return ("#2b1b08" if not self._hover else "#3b260b"), self._amber, "#ffd37d", "#3b2a10"
+        if self.accent:
+            return ("#053244" if not self._hover else "#07455d"), self._cyan, "#dff9ff", "#0a3d50"
+        return (self._base_bg if not self._hover else "#0b2633"), (self._line if not self._hover else self._cyan), (self._custom_fg or "#bce9f6"), "#0a2936"
+
+    def _draw(self):
+        self.delete("all")
+        w=max(20,self.winfo_width()); h=max(24,self.winfo_height())
+        bg,border,fg,glow=self._palette()
+        cut=8
+        pts=(cut,1,w-cut,1,w-1,cut,w-1,h-cut,w-cut,h-1,cut,h-1,1,h-cut,1,cut)
+        if self._hover and self.state != tk.DISABLED:
+            self.create_polygon(pts, fill=glow, outline="", smooth=False)
+            inset=2
+            pts2=(cut+inset,inset,w-cut-inset,inset,w-inset,cut+inset,w-inset,h-cut-inset,
+                  w-cut-inset,h-inset,cut+inset,h-inset,inset,h-cut-inset,inset,cut+inset)
+            self.create_polygon(pts2, fill=bg, outline=border, width=1)
+        else:
+            self.create_polygon(pts, fill=bg, outline=border, width=1)
+        self.create_line(cut+3,3,min(w-20,cut+55),3,fill=border,width=2)
+        self.create_line(w-14,h-4,w-5,h-4,fill=border,width=1)
+        self.create_text(w/2,h/2+1,text=self.text,fill=fg,font=("Consolas",9,"bold"))
+
+    def _enter(self, e=None):
+        if self.state != tk.DISABLED:
+            self._hover=True; self._draw()
+    def _leave(self, e=None):
+        self._hover=False; self._draw()
+    def _click(self, e=None):
+        if self.state != tk.DISABLED and self.command:
+            self.command()
+
+    def config(self, cnf=None, **kwargs):
+        if cnf and isinstance(cnf, dict): kwargs.update(cnf)
+        if "text" in kwargs: self.text=str(kwargs.pop("text"))
+        if "state" in kwargs: self.state=kwargs.pop("state")
+        if "bg" in kwargs: self._custom_bg=kwargs.pop("bg")
+        if "background" in kwargs: self._custom_bg=kwargs.pop("background")
+        if "fg" in kwargs: self._custom_fg=kwargs.pop("fg")
+        if "foreground" in kwargs: self._custom_fg=kwargs.pop("foreground")
+        if "command" in kwargs: self.command=kwargs.pop("command")
+        try:
+            if kwargs: super().config(**kwargs)
+        except tk.TclError:
+            pass
+        self._draw()
+    configure = config
+
+
 class ModeSelectionWindow:
     def __init__(self, parent=None):
         self.result = MODE_ALL
         self.parent = parent
         self.root = tk.Tk() if parent is None else tk.Toplevel(parent)
-        self.root.title("MITA AI — Выберите режим работы")
-        self.root.geometry("520x520")
+        self.root.title("MITA // SECURE MODE SELECTOR")
+        self.root.geometry("620x560")
         self.root.resizable(False, False)
-        self.root.configure(bg="#09070d")
+        self.root.configure(bg="#020a10")
 
         if parent is not None:
             self.root.transient(parent)
             self.root.grab_set()
 
-        self.canvas = tk.Canvas(self.root, bg="#09070d", highlightthickness=0)
+        self.canvas = tk.Canvas(self.root, bg="#020a10", highlightthickness=0)
         self.canvas.pack(fill="both", expand=True)
 
         for y in range(520):
@@ -1071,8 +1161,8 @@ class ModeSelectionWindow:
             b = int(13 + 14 * t)
             self.canvas.create_line(0, y, 520, y, fill=f"#{r:02x}{g:02x}{b:02x}")
 
-        self.canvas.create_text(260, 40, text="✦ MITA AI ✦", font=("Arial", 22, "bold"), fill="#ff8bc4")
-        self.canvas.create_text(260, 75, text="ВЫБЕРИТЕ РЕЖИМ РАБОТЫ", font=("Arial", 10, "bold"), fill="#a58ca9")
+        self.canvas.create_text(260, 40, text="MITA // SECURE INTELLIGENCE", font=("Arial", 22, "bold"), fill="#4bdcff")
+        self.canvas.create_text(260, 75, text="SELECT OPERATION PROTOCOL", font=("Arial", 10, "bold"), fill="#6e9aad")
 
         modes = [
             (MODE_SYSTEM, "🔧 Только система", "Выполняет системные команды\n(запуск, открытие, управление окнами)"),
@@ -1085,7 +1175,7 @@ class ModeSelectionWindow:
         y_pos = 120
         for mode, label, desc in modes:
             bg_id = self.canvas.create_rectangle(50, y_pos - 8, 470, y_pos + 75,
-                                                 fill="#150d1e", outline="#2b1835", width=1)
+                                                 fill="#06151e", outline="#0b4054", width=1)
 
             rb = tk.Radiobutton(
                 self.root,
@@ -1093,11 +1183,11 @@ class ModeSelectionWindow:
                 variable=self.selected_mode,
                 value=mode,
                 font=("Arial", 13, "bold"),
-                bg="#150d1e",
-                fg="#fff4fb",
-                selectcolor="#2b1835",
-                activebackground="#150d1e",
-                activeforeground="#ff8bc4",
+                bg="#06151e",
+                fg="#c9e9f5",
+                selectcolor="#0b4054",
+                activebackground="#06151e",
+                activeforeground="#4bdcff",
                 relief="flat",
                 bd=0,
                 cursor="hand2"
@@ -1105,7 +1195,7 @@ class ModeSelectionWindow:
             rb.place(x=70, y=y_pos, width=400, height=30)
 
             desc_text = self.canvas.create_text(260, y_pos + 45, text=desc,
-                                                font=("Arial", 9), fill="#a58ca9")
+                                                font=("Arial", 9), fill="#6e9aad")
 
             def make_handler(mode_val):
                 return lambda e: self.selected_mode.set(mode_val)
@@ -1114,19 +1204,8 @@ class ModeSelectionWindow:
 
             y_pos += 95
 
-        self.button = tk.Button(
-            self.root,
-            text="ПРИМЕНИТЬ И ЗАПУСТИТЬ",
-            command=self.confirm,
-            font=("Arial", 11, "bold"),
-            bg="#ff5caa",
-            fg="white",
-            activebackground="#ff8bc4",
-            relief="flat",
-            bd=0,
-            cursor="hand2"
-        )
-        self.button.place(x=105, y=430, width=310, height=45)
+        self.button = CyberButton(self.root, text="APPLY PROTOCOL / BOOT", command=self.confirm, accent=True, height=44)
+        self.button.place(x=145, y=452, width=330, height=44)
 
         self.dont_show_var = tk.IntVar(value=0)
         self.dont_show_cb = tk.Checkbutton(
@@ -1134,11 +1213,11 @@ class ModeSelectionWindow:
             text="Не показывать при запуске",
             variable=self.dont_show_var,
             font=("Arial", 9),
-            bg="#09070d",
-            fg="#a58ca9",
-            selectcolor="#09070d",
-            activebackground="#09070d",
-            activeforeground="#ff8bc4",
+            bg="#020a10",
+            fg="#6e9aad",
+            selectcolor="#020a10",
+            activebackground="#020a10",
+            activeforeground="#4bdcff",
             relief="flat",
             bd=0,
             cursor="hand2"
@@ -1191,16 +1270,16 @@ class KeyLoginWindow:
         self.result = False
         self.parent = parent
         self.root = tk.Tk() if parent is None else tk.Toplevel(parent)
-        self.root.title("MITA AI — Введите ключ")
-        self.root.geometry("520x400")
+        self.root.title("MITA // SECURE ACCESS")
+        self.root.geometry("620x430")
         self.root.resizable(False, False)
-        self.root.configure(bg="#09070d")
+        self.root.configure(bg="#020a10")
 
         if parent is not None:
             self.root.transient(parent)
             self.root.grab_set()
 
-        self.canvas = tk.Canvas(self.root, bg="#09070d", highlightthickness=0)
+        self.canvas = tk.Canvas(self.root, bg="#020a10", highlightthickness=0)
         self.canvas.pack(fill="both", expand=True)
 
         for y in range(400):
@@ -1210,20 +1289,18 @@ class KeyLoginWindow:
             b = int(13 + 14 * t)
             self.canvas.create_line(0, y, 520, y, fill=f"#{r:02x}{g:02x}{b:02x}")
 
-        self.canvas.create_text(260, 50, text="✦ MITA AI", font=("Arial", 24, "bold"), fill="#ff8bc4")
-        self.canvas.create_text(260, 145, text="SECURE ACCESS", font=("Arial", 9, "bold"), fill="#a58ca9")
-        self.canvas.create_text(260, 175, text="Введите ключ доступа", font=("Arial", 11, "bold"), fill="#fff4fb")
+        self.canvas.create_text(260, 50, text="MITA // ACCESS NODE", font=("Arial", 24, "bold"), fill="#4bdcff")
+        self.canvas.create_text(260, 145, text="AUTHENTICATION GATEWAY", font=("Arial", 9, "bold"), fill="#6e9aad")
+        self.canvas.create_text(260, 175, text="ENTER ACCESS KEY", font=("Arial", 11, "bold"), fill="#c9e9f5")
 
         self.entry = tk.Entry(self.root, font=("Arial", 13, "bold"), justify="center",
-                              bg="#150d1e", fg="#fff4fb", insertbackground="#ff8bc4", relief="flat", bd=0)
+                              bg="#06151e", fg="#c9e9f5", insertbackground="#4bdcff", relief="flat", bd=0)
         self.entry.place(x=70, y=200, width=380, height=42)
 
-        self.status = self.canvas.create_text(260, 265, text="", font=("Arial", 9, "bold"), fill="#a58ca9")
+        self.status = self.canvas.create_text(260, 265, text="", font=("Arial", 9, "bold"), fill="#6e9aad")
 
-        self.button = tk.Button(self.root, text="ВОЙТИ В MITA", command=self.try_login,
-                                font=("Arial", 10, "bold"), bg="#ff5caa", fg="white",
-                                activebackground="#ff8bc4", relief="flat", bd=0, cursor="hand2")
-        self.button.place(x=145, y=290, width=230, height=42)
+        self.button = CyberButton(self.root, text="ESTABLISH SECURE SESSION", command=self.try_login, accent=True, height=42)
+        self.button.place(x=170, y=312, width=280, height=42)
 
         self.entry.focus_set()
         self.root.bind("<Return>", lambda e: self.try_login())
@@ -1232,11 +1309,11 @@ class KeyLoginWindow:
     def try_login(self):
         ok, msg = validate_stella_key(self.entry.get())
         if ok:
-            self.canvas.itemconfig(self.status, text=msg, fill="#ff8bc4")
+            self.canvas.itemconfig(self.status, text=msg, fill="#4bdcff")
             self.result = True
             self.root.after(450, self.root.destroy)
         else:
-            self.canvas.itemconfig(self.status, text=msg, fill="#ff557f")
+            self.canvas.itemconfig(self.status, text=msg, fill="#ffb020")
             self.entry.delete(0, tk.END)
             self.entry.focus_set()
 
@@ -1342,14 +1419,14 @@ class MisideInterface:
     Logic and voice/music back-end remain compatible with the original script.
     """
 
-    W, H = 1280, 820
+    W, H = 1480, 900
 
     def __init__(self):
         self.root = tk.Tk()
-        self.root.title(T("app_title"))
+        self.root.title("MITA // SECURE INTELLIGENCE CONSOLE")
         self.root.geometry(f"{self.W}x{self.H}")
-        self.root.minsize(1080, 700)
-        self.root.configure(bg="#08090d")
+        self.root.minsize(1180, 740)
+        self.root.configure(bg="#020a10")
         self.root.resizable(True, True)
 
         self.running = True
@@ -1382,25 +1459,25 @@ class MisideInterface:
         self._toast_after = None
 
         self.colors = {
-            "bg": "#08090d",
-            "bg2": "#0c0e14",
-            "panel": "#11131b",
-            "panel2": "#161925",
-            "panel3": "#1b1e2b",
-            "line": "#282d3c",
-            "line2": "#34394a",
-            "primary": "#ff5aa8",
-            "primary2": "#ff8bc4",
-            "purple": "#9b7bff",
-            "cyan": "#69d7ff",
-            "green": "#55e69a",
-            "danger": "#ff5f78",
-            "text": "#f7f3f8",
-            "muted": "#949aaa",
-            "dim": "#626878",
-            "chat_bg": "#0b0d13",
-            "user": "#262033",
-            "mita": "#191622",
+            "bg": "#020a10",
+            "bg2": "#04121b",
+            "panel": "#06151e",
+            "panel2": "#081c27",
+            "panel3": "#0a2532",
+            "line": "#0b4054",
+            "line2": "#12627d",
+            "primary": "#00bfff",
+            "primary2": "#4bdcff",
+            "purple": "#00e5ff",
+            "cyan": "#00bfff",
+            "green": "#00ff9c",
+            "danger": "#ffb020",
+            "text": "#c9e9f5",
+            "muted": "#6e9aad",
+            "dim": "#315c6d",
+            "chat_bg": "#020c12",
+            "user": "#082532",
+            "mita": "#061a23",
         }
 
         self.root.protocol("WM_DELETE_WINDOW", self.quit)
@@ -1427,202 +1504,205 @@ class MisideInterface:
 
     def _label(self, parent, text, size=10, weight="normal", color=None, **kw):
         return tk.Label(
-            parent, text=text, font=("Segoe UI", size, weight),
+            parent, text=text, font=("Consolas", size, weight),
             bg=parent.cget("bg"), fg=color or self.colors["text"],
             **kw
         )
 
     def _button(self, parent, text, command, accent=False, danger=False, width=None):
-        bg = self.colors["primary"] if accent else (
-            self.colors["danger"] if danger else self.colors["panel3"]
-        )
-        fg = "#ffffff" if accent or danger else self.colors["text"]
-        btn = tk.Button(
-            parent, text=text, command=command,
-            font=("Segoe UI", 9, "bold"),
-            bg=bg, fg=fg, activebackground=self.colors["primary2"],
-            activeforeground="#ffffff", relief="flat", bd=0,
-            cursor="hand2", padx=12, pady=7,
-            highlightthickness=0
-        )
-        if width:
-            btn.config(width=width)
-        return btn
+        return CyberButton(parent, text=text, command=command, accent=accent,
+                           danger=danger, width=width, height=38)
 
     def _card(self, parent, title=None, subtitle=None):
-        frame = tk.Frame(
-            parent, bg=self.colors["panel"],
-            highlightbackground=self.colors["line"],
-            highlightthickness=1
-        )
+        outer = tk.Frame(parent, bg=self.colors["line"], bd=0)
+        frame = tk.Frame(outer, bg=self.colors["panel"], bd=0)
+        frame.pack(fill="both", expand=True, padx=1, pady=1)
+        # cyan micro-rail on top makes every panel feel like a live module
+        rail = tk.Frame(frame, bg=self.colors["line2"], height=2)
+        rail.pack(fill="x")
         if title:
-            head = tk.Frame(frame, bg=self.colors["panel"])
-            head.pack(fill="x", padx=18, pady=(15, 0))
-            tk.Label(head, text=title, font=("Segoe UI", 10, "bold"),
-                     bg=self.colors["panel"], fg=self.colors["text"]).pack(side="left")
+            head = tk.Frame(frame, bg=self.colors["panel"], height=38)
+            head.pack(fill="x", padx=14, pady=(8, 0))
+            head.pack_propagate(False)
+            tk.Label(head, text=f"// {title}", font=("Consolas", 9, "bold"),
+                     bg=self.colors["panel"], fg=self.colors["text"]).pack(side="left", pady=8)
             if subtitle:
-                tk.Label(head, text=subtitle, font=("Segoe UI", 8),
-                         bg=self.colors["panel"], fg=self.colors["muted"]).pack(side="right")
-        return frame
+                tk.Label(head, text=subtitle, font=("Consolas", 7, "bold"),
+                         bg=self.colors["panel"], fg=self.colors["green"]).pack(side="right", pady=8)
+        return outer
 
     def _bind_hover(self, widget, normal, hover):
         widget.bind("<Enter>", lambda e: widget.config(bg=hover))
         widget.bind("<Leave>", lambda e: widget.config(bg=normal))
 
     def _make_nav(self, parent, key, icon, idx):
-        row = tk.Frame(parent, bg=self.colors["panel"], height=42, cursor="hand2")
-        row.pack(fill="x", padx=12, pady=3)
-        icon_lbl = tk.Label(row, text=icon, font=("Segoe UI Symbol", 14),
-                            bg=self.colors["panel"], fg=self.colors["muted"])
-        icon_lbl.pack(side="left", padx=(12, 8))
-        text_lbl = tk.Label(row, text=key, font=("Segoe UI", 9, "bold"),
-                            bg=self.colors["panel"], fg=self.colors["muted"])
-        text_lbl.pack(side="left")
-        for w in (row, icon_lbl, text_lbl):
+        row = tk.Frame(parent, bg=self.colors["panel"], height=46, cursor="hand2")
+        row.pack(fill="x", padx=10, pady=2)
+        row.pack_propagate(False)
+        marker = tk.Frame(row, bg=self.colors["panel"], width=3)
+        marker.pack(side="left", fill="y")
+        icon_lbl = tk.Label(row, text=icon, font=("Consolas", 13, "bold"),
+                            bg=self.colors["panel"], fg=self.colors["muted"], width=3)
+        icon_lbl.pack(side="left", padx=(7, 2))
+        text_lbl = tk.Label(row, text=key.upper(), font=("Consolas", 8, "bold"),
+                            bg=self.colors["panel"], fg=self.colors["muted"], anchor="w")
+        text_lbl.pack(side="left", fill="x", expand=True)
+        code = tk.Label(row, text=f"0{idx+1}", font=("Consolas", 7, "bold"),
+                        bg=self.colors["panel"], fg=self.colors["dim"])
+        code.pack(side="right", padx=10)
+        for w in (row, icon_lbl, text_lbl, marker, code):
             w.bind("<Button-1>", lambda e, i=idx: self.switch_tab(i))
+            w.bind("<Enter>", lambda e, r=row: r.config(bg=self.colors["panel2"]))
         self.nav_items.append((row, icon_lbl, text_lbl))
         return row
-
-    # -------------------- setup --------------------
 
     def setup_ui(self):
         self.canvas = tk.Canvas(self.root, bg=self.colors["bg"], highlightthickness=0, bd=0)
         self.canvas.pack(fill="both", expand=True)
-
         self.create_background()
 
-        # Header
+        # ultra-thin intelligence ticker
+        self.intel_wire = tk.Frame(self.root, bg="#03131d",
+                                   highlightbackground=self.colors["line"], highlightthickness=1)
+        self.intel_wire.place(x=14, y=8, relwidth=0.981, height=28)
+        tk.Label(self.intel_wire, text="INTEL WIRE", font=("Consolas",8,"bold"),
+                 bg="#03131d", fg=self.colors["primary2"]).pack(side="left", padx=(12,8))
+        tk.Label(self.intel_wire, text="●", font=("Consolas",7,"bold"),
+                 bg="#03131d", fg=self.colors["danger"]).pack(side="left")
+        tk.Label(self.intel_wire, text="  SECURE VOICE CHANNEL / AI CORE / SYSTEM CONTROL / ENCRYPTED SESSION",
+                 font=("Consolas",7,"bold"), bg="#03131d", fg=self.colors["muted"]).pack(side="left")
+        self.wire_hash = tk.Label(self.intel_wire, text="HASH 1441D6FD4D7F", font=("Consolas",7,"bold"),
+                                  bg="#03131d", fg=self.colors["green"])
+        self.wire_hash.pack(side="right", padx=12)
+
+        # header status matrix
         self.header = tk.Frame(self.root, bg=self.colors["panel"],
                                highlightbackground=self.colors["line"], highlightthickness=1)
-        self.header.place(x=18, y=16, relwidth=0.972, height=68)
+        self.header.place(x=14, y=42, relwidth=0.981, height=70)
 
-        brand = tk.Frame(self.header, bg=self.colors["panel"])
-        brand.pack(side="left", padx=18)
-        tk.Label(brand, text="♥", font=("Segoe UI", 19, "bold"),
-                 bg=self.colors["panel"], fg=self.colors["primary2"]).pack(side="left", padx=(0, 9))
-        btext = tk.Frame(brand, bg=self.colors["panel"])
-        btext.pack(side="left")
-        tk.Label(btext, text="MITA", font=("Segoe UI", 18, "bold"),
-                 bg=self.colors["panel"], fg=self.colors["text"]).pack(anchor="w")
-        tk.Label(btext, text="PERSONAL AI • VOICE CORE",
-                 font=("Segoe UI", 7, "bold"), bg=self.colors["panel"],
+        brand = tk.Frame(self.header, bg=self.colors["panel"], width=330)
+        brand.pack(side="left", fill="y", padx=(14,4)); brand.pack_propagate(False)
+        tk.Label(brand, text="Ω", font=("Consolas",23,"bold"), bg=self.colors["panel"],
+                 fg=self.colors["primary2"]).pack(side="left", padx=(0,10))
+        bt=tk.Frame(brand,bg=self.colors["panel"]); bt.pack(side="left", pady=13)
+        tk.Label(bt,text="MITA // SECURE CORE",font=("Consolas",14,"bold"),bg=self.colors["panel"],
+                 fg=self.colors["text"]).pack(anchor="w")
+        tk.Label(bt,text="OPERATOR INTELLIGENCE CONSOLE",font=("Consolas",7,"bold"),bg=self.colors["panel"],
                  fg=self.colors["muted"]).pack(anchor="w")
 
-        self.header_status = tk.Label(
-            self.header, text="●  ONLINE", font=("Segoe UI", 8, "bold"),
-            bg="#12231d", fg=self.colors["green"], padx=12, pady=5
-        )
-        self.header_status.pack(side="right", padx=18)
+        def header_metric(title, value, color):
+            f=tk.Frame(self.header,bg=self.colors["panel"],highlightbackground="#0a2d3b",highlightthickness=1)
+            f.pack(side="left",fill="both",expand=True,padx=3,pady=9)
+            tk.Label(f,text=title,font=("Consolas",6,"bold"),bg=self.colors["panel"],fg=self.colors["dim"]).pack(anchor="w",padx=10,pady=(7,0))
+            tk.Label(f,text=value,font=("Consolas",8,"bold"),bg=self.colors["panel"],fg=color).pack(anchor="e",padx=10,pady=(0,5))
+            return f
+        header_metric("SYSTEM STATE","● OPERATIONAL",self.colors["green"])
+        header_metric("CIPHER ROTATION","00:40",self.colors["primary2"])
+        header_metric("RELAY HEALTH","99.995%",self.colors["text"])
 
-        self.header_clock = tk.Label(self.header, text="",
-                                     font=("Segoe UI", 9, "bold"),
-                                     bg=self.colors["panel"], fg=self.colors["muted"])
-        self.header_clock.pack(side="right", padx=15)
+        self.header_clock = tk.Label(self.header,text="",font=("Consolas",8,"bold"),
+                                     bg=self.colors["panel"],fg=self.colors["primary2"],padx=14)
+        self.header_clock.pack(side="right",fill="y")
 
-        # Body
+        # three-column body: navigation / content / telemetry
         self.body = tk.Frame(self.root, bg=self.colors["bg"])
-        self.body.place(x=18, y=96, relwidth=0.972, relheight=0.865)
+        self.body.place(x=14, y=120, relwidth=0.981, relheight=0.845)
 
-        self.sidebar = tk.Frame(
-            self.body, bg=self.colors["panel"],
-            highlightbackground=self.colors["line"], highlightthickness=1
-        )
-        self.sidebar.pack(side="left", fill="y", padx=(0, 12))
-        self.sidebar.config(width=225)
-        self.sidebar.pack_propagate(False)
+        self.sidebar = tk.Frame(self.body,bg=self.colors["panel"],
+                                highlightbackground=self.colors["line"],highlightthickness=1,width=238)
+        self.sidebar.pack(side="left",fill="y",padx=(0,8)); self.sidebar.pack_propagate(False)
 
-        self.content = tk.Frame(self.body, bg=self.colors["bg2"],
-                                highlightbackground=self.colors["line"],
-                                highlightthickness=1)
-        self.content.pack(side="left", fill="both", expand=True)
+        self.content = tk.Frame(self.body,bg=self.colors["bg2"],
+                                highlightbackground=self.colors["line"],highlightthickness=1)
+        self.content.pack(side="left",fill="both",expand=True,padx=(0,8))
+
+        self.rightbar = tk.Frame(self.body,bg=self.colors["panel"],
+                                 highlightbackground=self.colors["line"],highlightthickness=1,width=238)
+        self.rightbar.pack(side="right",fill="y"); self.rightbar.pack_propagate(False)
 
         self.build_sidebar()
         self.build_content()
-
-        self.create_particles()
-        self.create_stars()
-        self.create_floating_stars()
-        self.update_key_info()
-        self.switch_tab(0)
+        self.build_rightbar()
+        self.create_particles(); self.create_stars(); self.create_floating_stars()
+        self.update_key_info(); self.switch_tab(0)
 
     def build_sidebar(self):
-        top = tk.Frame(self.sidebar, bg=self.colors["panel"])
-        top.pack(fill="x", padx=15, pady=(20, 12))
-        tk.Label(top, text="CONTROL CENTER", font=("Segoe UI", 8, "bold"),
-                 bg=self.colors["panel"], fg=self.colors["dim"]).pack(anchor="w")
-        tk.Label(top, text="Управление MITA", font=("Segoe UI", 13, "bold"),
-                 bg=self.colors["panel"], fg=self.colors["text"]).pack(anchor="w", pady=(4,0))
+        top=tk.Frame(self.sidebar,bg=self.colors["panel"]); top.pack(fill="x",padx=14,pady=(16,8))
+        tk.Label(top,text="OPERATOR PANEL",font=("Consolas",7,"bold"),bg=self.colors["panel"],fg=self.colors["dim"]).pack(anchor="w")
+        tk.Label(top,text="CONTROL NODE",font=("Consolas",13,"bold"),bg=self.colors["panel"],fg=self.colors["text"]).pack(anchor="w",pady=(3,0))
+        tk.Label(top,text="AUTHENTICATED // OMEGA",font=("Consolas",6,"bold"),bg=self.colors["panel"],fg=self.colors["green"]).pack(anchor="w",pady=(2,0))
 
-        self.nav_items = []
-        self._make_nav(self.sidebar, T("nav_main"), "⌂", 0)
-        self._make_nav(self.sidebar, T("nav_chat"), "◉", 1)
-        self._make_nav(self.sidebar, T("nav_commands"), "⌘", 2)
-        self._make_nav(self.sidebar, T("nav_settings"), "⚙", 3)
+        self.nav_items=[]
+        self._make_nav(self.sidebar,T("nav_main"),"⌂",0)
+        self._make_nav(self.sidebar,T("nav_chat"),"◉",1)
+        self._make_nav(self.sidebar,T("nav_commands"),"⌘",2)
+        self._make_nav(self.sidebar,T("nav_settings"),"⚙",3)
 
-        sep = tk.Frame(self.sidebar, bg=self.colors["line"], height=1)
-        sep.pack(fill="x", padx=15, pady=16)
+        tk.Frame(self.sidebar,bg=self.colors["line"],height=1).pack(fill="x",padx=12,pady=12)
 
-        # Engine
-        engine = tk.Frame(self.sidebar, bg=self.colors["panel"])
-        engine.pack(fill="x", padx=15)
-        tk.Label(engine, text="VOICE ENGINE", font=("Segoe UI", 8, "bold"),
-                 bg=self.colors["panel"], fg=self.colors["dim"]).pack(anchor="w")
-        self.engine_status = tk.Label(engine, text="●  MITA CORE ONLINE",
-                                      font=("Segoe UI", 9, "bold"),
-                                      bg=self.colors["panel"], fg=self.colors["green"])
-        self.engine_status.pack(anchor="w", pady=(7, 0))
+        # network status module
+        net=self._card(self.sidebar,"NETWORK STATUS","LIVE")
+        net.pack(fill="x",padx=10,pady=4)
+        nf=tk.Frame(net.winfo_children()[0],bg=self.colors["panel"]); nf.pack(fill="x",padx=12,pady=(2,10))
+        tk.Label(nf,text="9/9 NODES ONLINE",font=("Consolas",9,"bold"),bg=self.colors["panel"],fg=self.colors["green"]).pack(anchor="w")
+        tk.Label(nf,text="VOICE RELAY  •  AI CORE",font=("Consolas",6,"bold"),bg=self.colors["panel"],fg=self.colors["muted"]).pack(anchor="w",pady=(2,0))
 
-        # Hotword card
-        hot = self._card(self.sidebar)
-        hot.pack(fill="x", padx=12, pady=(15, 7))
-        tk.Label(hot, text="HOTWORD", font=("Segoe UI", 8, "bold"),
-                 bg=self.colors["panel"], fg=self.colors["dim"]).pack(anchor="w", padx=12, pady=(12,2))
-        tk.Label(hot, text="«Стелла»  •  «Мита»", font=("Segoe UI", 9, "bold"),
-                 bg=self.colors["panel"], fg=self.colors["text"]).pack(anchor="w", padx=12)
-        tk.Label(hot, text="Голосовое пробуждение активно",
-                 font=("Segoe UI", 7), bg=self.colors["panel"],
-                 fg=self.colors["muted"]).pack(anchor="w", padx=12, pady=(2,12))
+        mode=self._card(self.sidebar,"PROCESSING MODE","MANUAL")
+        mode.pack(fill="x",padx=10,pady=5)
+        inner=mode.winfo_children()[0]
+        self.mode_label=tk.Label(inner,text=get_mode_name(_mita_mode),font=("Consolas",8,"bold"),
+                                 bg=self.colors["panel"],fg=self.colors["primary2"])
+        self.mode_label.pack(anchor="w",padx=12,pady=(3,5))
+        self.mode_button=self._button(inner,T("change_mode"),self.change_mode)
+        self.mode_button.pack(fill="x",padx=10,pady=(0,10))
 
-        # Mode
-        mode = self._card(self.sidebar)
-        mode.pack(fill="x", padx=12, pady=7)
-        tk.Label(mode, text=T("mode"), font=("Segoe UI", 8, "bold"),
-                 bg=self.colors["panel"], fg=self.colors["dim"]).pack(anchor="w", padx=12, pady=(11,2))
-        self.mode_label = tk.Label(mode, text=get_mode_name(_mita_mode),
-                                   font=("Segoe UI", 9, "bold"),
-                                   bg=self.colors["panel"], fg=self.colors["primary2"])
-        self.mode_label.pack(anchor="w", padx=12)
-        self.mode_button = self._button(mode, T("change_mode"), self.change_mode)
-        self.mode_button.pack(fill="x", padx=10, pady=9)
+        voice=self._card(self.sidebar,"VOICE ENGINE","READY")
+        voice.pack(fill="x",padx=10,pady=5); vi=voice.winfo_children()[0]
+        self.engine_status=tk.Label(vi,text="● MITA CORE ONLINE",font=("Consolas",7,"bold"),bg=self.colors["panel"],fg=self.colors["green"])
+        self.engine_status.pack(anchor="w",padx=12,pady=(3,5))
+        self.manual_record_button=self._button(vi,"[ MIC ]  "+T("manual_input_btn"),self.toggle_manual_record,accent=True)
+        self.manual_record_button.pack(fill="x",padx=10,pady=3)
+        self.tts_mute_button=self._button(vi,"[ VOICE ]  "+T("voice_on"),self.toggle_tts_mute)
+        self.tts_mute_button.pack(fill="x",padx=10,pady=3)
+        self.corrector_button=self._button(vi,"[ TEXT ]  "+T("corrector_off"),self.toggle_corrector)
+        self.corrector_button.pack(fill="x",padx=10,pady=(3,10))
 
-        # Voice controls
-        vc = self._card(self.sidebar)
-        vc.pack(fill="x", padx=12, pady=7)
-        tk.Label(vc, text="VOICE", font=("Segoe UI", 8, "bold"),
-                 bg=self.colors["panel"], fg=self.colors["dim"]).pack(anchor="w", padx=12, pady=(11,5))
+        access=self._card(self.sidebar,"ACCESS TOKEN","SECURE")
+        access.pack(fill="x",padx=10,pady=5); ai=access.winfo_children()[0]
+        self.key_info_label=tk.Label(ai,text="",font=("Consolas",7,"bold"),bg=self.colors["panel"],fg=self.colors["text"],justify="left")
+        self.key_info_label.pack(anchor="w",padx=12,pady=(3,4))
+        self.change_key_btn=self._button(ai,T("change_key"),self.change_key)
+        self.change_key_btn.pack(fill="x",padx=10,pady=(0,10))
 
-        self.manual_record_button = self._button(
-            vc, T("manual_input_btn"), self.toggle_manual_record, accent=True
-        )
-        self.manual_record_button.pack(fill="x", padx=10, pady=3)
+    def build_rightbar(self):
+        top=tk.Frame(self.rightbar,bg=self.colors["panel"]); top.pack(fill="x",padx=13,pady=(15,8))
+        tk.Label(top,text="TRACE DEFENSE",font=("Consolas",7,"bold"),bg=self.colors["panel"],fg=self.colors["dim"]).pack(anchor="w")
+        tk.Label(top,text="SYNCHRONIZATION",font=("Consolas",11,"bold"),bg=self.colors["panel"],fg=self.colors["text"]).pack(anchor="w",pady=(3,0))
 
-        self.tts_mute_button = self._button(vc, T("voice_on"), self.toggle_tts_mute)
-        self.tts_mute_button.pack(fill="x", padx=10, pady=3)
+        shield=self._card(self.rightbar,"DEFENSE MATRIX","ACTIVE")
+        shield.pack(fill="x",padx=10,pady=5); si=shield.winfo_children()[0]
+        self.shield_canvas=tk.Canvas(si,bg=self.colors["panel"],highlightthickness=0,height=150)
+        self.shield_canvas.pack(fill="x",padx=8,pady=4)
+        c=self.shield_canvas; cx,cy=105,70
+        for r,col in [(52,"#0b3242"),(41,"#0d4b60"),(29,"#0e667e")]: c.create_oval(cx-r,cy-r,cx+r,cy+r,outline=col,width=1)
+        c.create_text(cx,cy,text="Ω",font=("Consolas",19,"bold"),fill=self.colors["green"])
+        c.create_text(cx,132,text="IDENTITY MASK  100%",font=("Consolas",6,"bold"),fill=self.colors["primary2"])
 
-        self.corrector_button = self._button(vc, T("corrector_off"), self.toggle_corrector)
-        self.corrector_button.pack(fill="x", padx=10, pady=(3,10))
+        sync=self._card(self.rightbar,"LIVE SESSION","OMEGA ONLY")
+        sync.pack(fill="x",padx=10,pady=5); sy=sync.winfo_children()[0]
+        self.sync_canvas=tk.Canvas(sy,bg=self.colors["panel"],highlightthickness=0,height=140)
+        self.sync_canvas.pack(fill="x",padx=8,pady=5)
+        cc=self.sync_canvas; cc.create_oval(47,15,157,125,outline="#0b4054",width=10)
+        cc.create_arc(47,15,157,125,start=90,extent=-250,style="arc",outline=self.colors["primary"],width=6)
+        cc.create_text(102,62,text="99%",font=("Consolas",19,"bold"),fill=self.colors["primary"])
+        cc.create_text(102,88,text="LINK STABLE",font=("Consolas",7,"bold"),fill=self.colors["muted"])
 
-        # Key
-        key_card = self._card(self.sidebar)
-        key_card.pack(fill="x", padx=12, pady=7)
-        tk.Label(key_card, text="ACCESS KEY", font=("Segoe UI", 8, "bold"),
-                 bg=self.colors["panel"], fg=self.colors["dim"]).pack(anchor="w", padx=12, pady=(10,2))
-        self.key_info_label = tk.Label(key_card, text="",
-                                       font=("Segoe UI", 8, "bold"),
-                                       bg=self.colors["panel"], fg=self.colors["text"])
-        self.key_info_label.pack(anchor="w", padx=12)
-        self.change_key_btn = self._button(key_card, T("change_key"), self.change_key)
-        self.change_key_btn.pack(fill="x", padx=10, pady=(7,10))
+        log=self._card(self.rightbar,"ENCRYPTED EVENT LOG","LIVE")
+        log.pack(fill="both",expand=True,padx=10,pady=5); li=log.winfo_children()[0]
+        self.event_log=tk.Text(li,bg="#020c12",fg=self.colors["muted"],font=("Consolas",7),bd=0,relief="flat",height=10,padx=8,pady=8)
+        self.event_log.pack(fill="both",expand=True,padx=8,pady=(4,8))
+        self.event_log.insert("end","22:54:58  CORE BOOT OK\n22:54:59  VOICE RELAY READY\n22:55:00  AI CHANNEL SEALED\n22:55:01  TRACE SHIELD ACTIVE\n22:55:02  WAITING REQUEST...\n")
+        self.event_log.config(state="disabled")
 
     def build_content(self):
         self.pages = {}
@@ -1636,296 +1716,132 @@ class MisideInterface:
         return f
 
     def build_home_page(self):
-        page = self._page()
-        self.pages[0] = page
+        page=self._page(); self.pages[0]=page
+        # operation notice strip
+        notice=tk.Frame(page,bg="#07141b",highlightbackground="#7b5616",highlightthickness=1)
+        notice.pack(fill="x",padx=14,pady=(14,8))
+        tk.Label(notice,text="OPERATOR NOTICE",font=("Consolas",7,"bold"),bg="#07141b",fg=self.colors["danger"],padx=10,pady=8).pack(side="left")
+        tk.Label(notice,text="Secure voice dispatch active. Commands are relayed individually through MITA CORE.",font=("Consolas",7),bg="#07141b",fg=self.colors["muted"]).pack(side="left")
+        tk.Label(notice,text="PROTOCOL 7.4",font=("Consolas",6,"bold"),bg="#07141b",fg="#a87820",padx=10).pack(side="right")
 
-        # Hero
-        hero = tk.Frame(page, bg=self.colors["bg2"])
-        hero.pack(fill="x", padx=24, pady=(22, 12))
-        tk.Label(hero, text="Добро пожаловать обратно", font=("Segoe UI", 20, "bold"),
-                 bg=self.colors["bg2"], fg=self.colors["text"]).pack(anchor="w")
-        tk.Label(hero, text="MITA готова слушать, отвечать и выполнять команды.",
-                 font=("Segoe UI", 9), bg=self.colors["bg2"],
-                 fg=self.colors["muted"]).pack(anchor="w", pady=(3,0))
+        grid=tk.Frame(page,bg=self.colors["bg2"]); grid.pack(fill="both",expand=True,padx=14,pady=(0,8))
+        grid.columnconfigure(0,weight=4); grid.columnconfigure(1,weight=2)
+        grid.rowconfigure(0,weight=3); grid.rowconfigure(1,weight=2)
 
-        # Main grid
-        grid = tk.Frame(page, bg=self.colors["bg2"])
-        grid.pack(fill="both", expand=True, padx=24, pady=(0,20))
-        grid.columnconfigure(0, weight=3)
-        grid.columnconfigure(1, weight=2)
-        grid.rowconfigure(0, weight=1)
-        grid.rowconfigure(1, weight=1)
+        core=self._card(grid,"MITA NETWORK CORE","STREAMING")
+        core.grid(row=0,column=0,rowspan=2,sticky="nsew",padx=(0,6),pady=4)
+        ci=core.winfo_children()[0]
+        self.core_canvas=tk.Canvas(ci,bg="#020d14",highlightthickness=0)
+        self.core_canvas.pack(fill="both",expand=True,padx=8,pady=(3,8)); self.core_canvas.bind("<Configure>",self._resize_core)
 
-        core = self._card(grid, "MITA CORE", "LIVE")
-        core.grid(row=0, column=0, rowspan=2, sticky="nsew", padx=(0,8), pady=4)
+        status=self._card(grid,"SYSTEM TELEMETRY","REAL TIME")
+        status.grid(row=0,column=1,sticky="nsew",padx=(6,0),pady=4); si=status.winfo_children()[0]
+        sf=tk.Frame(si,bg=self.colors["panel"]); sf.pack(fill="both",expand=True,padx=12,pady=(3,10))
+        self.status_text=tk.Label(sf,text=T("ready"),font=("Consolas",11,"bold"),bg=self.colors["panel"],fg=self.colors["primary2"])
+        self.status_text.pack(anchor="w")
+        self.status_sub=tk.Label(sf,text=T("waiting"),font=("Consolas",7),bg=self.colors["panel"],fg=self.colors["muted"])
+        self.status_sub.pack(anchor="w",pady=(2,12))
+        # segmented telemetry bars
+        for label,val,col in [("RELAY HEALTH",99,self.colors["green"]),("ROUTE ENTROPY",97,self.colors["primary"]),("VOICE LINK",92,self.colors["primary2"])]:
+            tk.Label(sf,text=f"{label}  {val}%",font=("Consolas",6,"bold"),bg=self.colors["panel"],fg=self.colors["muted"]).pack(anchor="w",pady=(3,1))
+            bar=tk.Frame(sf,bg="#0a2733",height=4); bar.pack(fill="x"); fill=tk.Frame(bar,bg=col,height=4); fill.place(x=0,y=0,relwidth=val/100,relheight=1)
+        self.ram_value=tk.Label(sf,text="— MB",font=("Consolas",16,"bold"),bg=self.colors["panel"],fg=self.colors["text"])
+        self.ram_value.pack(anchor="w",pady=(14,0))
+        tk.Label(sf,text="RAM / PROCESS MEMORY",font=("Consolas",6,"bold"),bg=self.colors["panel"],fg=self.colors["dim"]).pack(anchor="w")
+        self.audio_value=tk.Label(sf,text="● QUIET",font=("Consolas",8,"bold"),bg=self.colors["panel"],fg=self.colors["muted"])
+        self.audio_value.pack(anchor="w",pady=(10,0))
 
-        self.core_canvas = tk.Canvas(core, bg=self.colors["panel"], highlightthickness=0)
-        self.core_canvas.pack(fill="both", expand=True, padx=10, pady=10)
-        self.core_canvas.bind("<Configure>", self._resize_core)
+        quick=self._card(grid,"MANUAL DISPATCH","CONTROL")
+        quick.grid(row=1,column=1,sticky="nsew",padx=(6,0),pady=4); qi=quick.winfo_children()[0]
+        q=tk.Frame(qi,bg=self.colors["panel"]); q.pack(fill="both",expand=True,padx=10,pady=(2,10))
+        self._button(q,"[ MIC ]  REQUEST SIGNAL",self.toggle_manual_record,accent=True).pack(fill="x",pady=3)
+        self._button(q,"[ CHAT ]  OPEN CHANNEL",lambda:self.switch_tab(1)).pack(fill="x",pady=3)
+        self._button(q,"[ STOP ]  MUSIC RELAY",self.stop_music_click,danger=True).pack(fill="x",pady=3)
+        self._button(q,"[ CFG ]  SYSTEM SETTINGS",lambda:self.switch_tab(3)).pack(fill="x",pady=3)
 
-        info = self._card(grid, "SYSTEM STATUS", "REAL TIME")
-        info.grid(row=0, column=1, sticky="nsew", padx=(8,0), pady=4)
-
-        stats = tk.Frame(info, bg=self.colors["panel"])
-        stats.pack(fill="both", expand=True, padx=15, pady=12)
-        self.status_text = tk.Label(stats, text=T("ready"),
-                                    font=("Segoe UI", 13, "bold"),
-                                    bg=self.colors["panel"], fg=self.colors["primary2"])
-        self.status_text.pack(anchor="w", pady=(4,2))
-        self.status_sub = tk.Label(stats, text=T("waiting"),
-                                   font=("Segoe UI", 9),
-                                   bg=self.colors["panel"], fg=self.colors["muted"])
-        self.status_sub.pack(anchor="w", pady=(0,12))
-
-        self.ram_value = tk.Label(stats, text="— MB", font=("Segoe UI", 18, "bold"),
-                                  bg=self.colors["panel"], fg=self.colors["text"])
-        self.ram_value.pack(anchor="w")
-        tk.Label(stats, text="RAM USAGE", font=("Segoe UI", 7, "bold"),
-                 bg=self.colors["panel"], fg=self.colors["dim"]).pack(anchor="w")
-
-        self.audio_value = tk.Label(stats, text="● QUIET", font=("Segoe UI", 9, "bold"),
-                                    bg=self.colors["panel"], fg=self.colors["muted"])
-        self.audio_value.pack(anchor="w", pady=(15,0))
-
-        quick = self._card(grid, "QUICK ACTIONS", "ONE CLICK")
-        quick.grid(row=1, column=1, sticky="nsew", padx=(8,0), pady=4)
-
-        q = tk.Frame(quick, bg=self.colors["panel"])
-        q.pack(fill="both", expand=True, padx=14, pady=12)
-        self._button(q, "🎤  Говорить", self.toggle_manual_record, accent=True).pack(fill="x", pady=3)
-        self._button(q, "🗑  Очистить чат", self.clear_chat).pack(fill="x", pady=3)
-        self._button(q, "⏹  Стоп музыки", self.stop_music_click, danger=True).pack(fill="x", pady=3)
-        self._button(q, "⚙  Настройки", lambda: self.switch_tab(3)).pack(fill="x", pady=3)
-
-        # Music player
-        music = self._card(page, "NOW PLAYING", "MUSIC CORE")
-        music.pack(fill="x", padx=24, pady=(0,20))
-        mf = tk.Frame(music, bg=self.colors["panel"])
-        mf.pack(fill="x", padx=15, pady=12)
-        self.music_icon = tk.Label(mf, text="♫", font=("Segoe UI", 24, "bold"),
-                                   bg=self.colors["panel"], fg=self.colors["primary2"])
-        self.music_icon.pack(side="left", padx=(0,12))
-        mt = tk.Frame(mf, bg=self.colors["panel"])
-        mt.pack(side="left", fill="x", expand=True)
-        self.music_title = tk.Label(mt, text="Музыка не играет",
-                                    font=("Segoe UI", 10, "bold"),
-                                    bg=self.colors["panel"], fg=self.colors["text"])
-        self.music_title.pack(anchor="w")
-        self.music_meta = tk.Label(mt, text="Голосовая команда: «Мита, включи песню…»",
-                                   font=("Segoe UI", 8), bg=self.colors["panel"],
-                                   fg=self.colors["muted"])
-        self.music_meta.pack(anchor="w", pady=(3,0))
-        self.music_stop_button = self._button(mf, T("music_stop"), self.stop_music_click, danger=True)
-        self.music_stop_button.pack(side="right")
-        self.music_stop_button.config(state=tk.DISABLED)
+        music=self._card(page,"NOW PLAYING / AUDIO RELAY","MUSIC CORE")
+        music.pack(fill="x",padx=14,pady=(0,14)); mi=music.winfo_children()[0]
+        mf=tk.Frame(mi,bg=self.colors["panel"]); mf.pack(fill="x",padx=12,pady=(2,10))
+        eq=tk.Canvas(mf,width=66,height=38,bg=self.colors["panel"],highlightthickness=0); eq.pack(side="left",padx=(0,10))
+        for i,h in enumerate([9,18,28,15,24,11,20]): eq.create_rectangle(4+i*8,32-h,8+i*8,32,fill=self.colors["primary"],outline="")
+        mt=tk.Frame(mf,bg=self.colors["panel"]); mt.pack(side="left",fill="x",expand=True)
+        self.music_title=tk.Label(mt,text="NO ACTIVE AUDIO STREAM",font=("Consolas",9,"bold"),bg=self.colors["panel"],fg=self.colors["text"]); self.music_title.pack(anchor="w")
+        self.music_meta=tk.Label(mt,text="VOICE QUERY: «Мита, включи песню…»",font=("Consolas",6,"bold"),bg=self.colors["panel"],fg=self.colors["muted"]); self.music_meta.pack(anchor="w",pady=(2,0))
+        self.music_stop_button=self._button(mf,"TERMINATE STREAM",self.stop_music_click,danger=True); self.music_stop_button.pack(side="right"); self.music_stop_button.config(state=tk.DISABLED)
 
     def build_chat_page(self):
-        page = self._page()
-        self.pages[1] = page
+        page=self._page(); self.pages[1]=page
+        head=tk.Frame(page,bg=self.colors["bg2"]); head.pack(fill="x",padx=16,pady=(15,8))
+        tk.Label(head,text="ENCRYPTED AI CHANNEL",font=("Consolas",14,"bold"),bg=self.colors["bg2"],fg=self.colors["text"]).pack(side="left")
+        self.chat_counter=tk.Label(head,text="0 SIGNALS",font=("Consolas",7,"bold"),bg=self.colors["bg2"],fg=self.colors["green"]); self.chat_counter.pack(side="right",pady=6)
 
-        head = tk.Frame(page, bg=self.colors["bg2"])
-        head.pack(fill="x", padx=24, pady=(22,10))
-        tk.Label(head, text="Чат с Митой", font=("Segoe UI", 20, "bold"),
-                 bg=self.colors["bg2"], fg=self.colors["text"]).pack(side="left")
-        self.chat_counter = tk.Label(head, text="0 сообщений",
-                                     font=("Segoe UI", 8, "bold"),
-                                     bg=self.colors["bg2"], fg=self.colors["muted"])
-        self.chat_counter.pack(side="right", pady=8)
+        card=self._card(page,"CLASSIFIED SIGNAL ARCHIVE","MANUAL RELAY"); card.pack(fill="both",expand=True,padx=16,pady=(0,14)); ci=card.winfo_children()[0]
+        self.chat_display=scrolledtext.ScrolledText(ci,bg="#020b11",fg=self.colors["text"],font=("Consolas",9),wrap=tk.WORD,bd=0,relief="flat",insertbackground=self.colors["primary2"],padx=18,pady=14,selectbackground="#0b4f65")
+        self.chat_display.pack(fill="both",expand=True,padx=8,pady=(3,8)); self.chat_display.config(state=tk.DISABLED)
+        self.chat_display.tag_config("mita_name",foreground=self.colors["green"],font=("Consolas",8,"bold"))
+        self.chat_display.tag_config("mita_text",foreground="#b9dce7",font=("Consolas",9))
+        self.chat_display.tag_config("user_name",foreground=self.colors["primary2"],font=("Consolas",8,"bold"))
+        self.chat_display.tag_config("user_text",foreground=self.colors["text"],font=("Consolas",9))
 
-        card = self._card(page)
-        card.pack(fill="both", expand=True, padx=24, pady=(0,18))
+        self.chat_menu=Menu(self.root,tearoff=0,bg=self.colors["panel2"],fg=self.colors["text"],activebackground="#0b4f65",activeforeground="white",bd=0)
+        self.chat_menu.add_command(label="COPY SIGNAL",command=self.copy_selected_message); self.chat_menu.add_command(label="COPY ARCHIVE",command=self.copy_all_chat); self.chat_menu.add_separator(); self.chat_menu.add_command(label="PURGE ARCHIVE",command=self.clear_chat)
+        self.chat_display.bind("<Button-3>",self.show_chat_menu); self.chat_display.bind("<Control-c>",lambda e:self.copy_selected_message()); self.chat_display.bind("<Control-a>",lambda e:self.select_all_chat())
 
-        self.chat_display = scrolledtext.ScrolledText(
-            card, bg=self.colors["chat_bg"], fg=self.colors["text"],
-            font=("Segoe UI", 10), wrap=tk.WORD, bd=0, relief="flat",
-            insertbackground=self.colors["primary2"], padx=16, pady=14,
-            selectbackground=self.colors["primary"]
-        )
-        self.chat_display.pack(fill="both", expand=True, padx=10, pady=10)
-        self.chat_display.config(state=tk.DISABLED)
-
-        self.chat_display.tag_config("mita_name", foreground=self.colors["primary2"],
-                                     font=("Segoe UI", 9, "bold"))
-        self.chat_display.tag_config("mita_text", foreground="#e9e5eb",
-                                     font=("Segoe UI", 10))
-        self.chat_display.tag_config("user_name", foreground=self.colors["purple"],
-                                     font=("Segoe UI", 9, "bold"))
-        self.chat_display.tag_config("user_text", foreground=self.colors["text"],
-                                     font=("Segoe UI", 10))
-
-        self.chat_menu = Menu(self.root, tearoff=0, bg=self.colors["panel2"],
-                              fg=self.colors["text"], activebackground=self.colors["primary"],
-                              activeforeground="white")
-        self.chat_menu.add_command(label="📋 Копировать сообщение", command=self.copy_selected_message)
-        self.chat_menu.add_command(label="📋 Копировать всё", command=self.copy_all_chat)
-        self.chat_menu.add_separator()
-        self.chat_menu.add_command(label="🗑 Очистить чат", command=self.clear_chat)
-        self.chat_display.bind("<Button-3>", self.show_chat_menu)
-        self.chat_display.bind("<Control-c>", lambda e: self.copy_selected_message())
-        self.chat_display.bind("<Control-a>", lambda e: self.select_all_chat())
-
-        bottom = tk.Frame(card, bg=self.colors["panel"])
-        bottom.pack(fill="x", padx=10, pady=(0,10))
-        self.chat_input = tk.Entry(
-            bottom, bg=self.colors["panel3"], fg=self.colors["text"],
-            font=("Segoe UI", 10), relief="flat", bd=0,
-            insertbackground=self.colors["primary2"]
-        )
-        self.chat_input.pack(side="left", fill="x", expand=True, ipady=11, padx=(0,8))
-        self.chat_input.bind("<Return>", lambda e: self.send_chat_message())
-        self.chat_input.bind("<Button-3>", self.show_input_menu)
-        self.chat_input.bind("<Control-a>", lambda e: self.select_all_input())
-        self.chat_input.bind("<Control-c>", lambda e: self.copy_input_text())
-        self.chat_input.bind("<Control-v>", lambda e: self.paste_input_text())
-        self.chat_input.bind("<Control-x>", lambda e: self.cut_input_text())
-
-        self.send_button = self._button(bottom, "➤", self.send_chat_message, accent=True)
-        self.send_button.pack(side="right", ipadx=10, ipady=4)
-
-        self.input_menu = Menu(self.root, tearoff=0, bg=self.colors["panel2"],
-                               fg=self.colors["text"], activebackground=self.colors["primary"])
-        self.input_menu.add_command(label="✂ Вырезать", command=self.cut_input_text)
-        self.input_menu.add_command(label="📋 Копировать", command=self.copy_input_text)
-        self.input_menu.add_command(label="📎 Вставить", command=self.paste_input_text)
-        self.input_menu.add_separator()
-        self.input_menu.add_command(label="🗑 Очистить", command=self.clear_input_text)
-        self.input_menu.add_command(label="↔ Выделить всё", command=self.select_all_input)
-
-        hello_msg = (
-            f"{T('mita_greeting')}\n"
-            f"{T('mita_mode')}{get_mode_name(_mita_mode)}\n"
-            f"{T('mita_corrector')}{T('corrector_off_info') if not _text_corrector_enabled else T('corrector_on_info')}\n"
-            f"{T('mita_lang')}\n{T('mita_help')}"
-        )
-        self.add_chat_message("Мита", hello_msg, is_mita=True)
+        bottom=tk.Frame(ci,bg=self.colors["panel"]); bottom.pack(fill="x",padx=8,pady=(0,8))
+        shell=tk.Frame(bottom,bg=self.colors["line"],bd=0); shell.pack(side="left",fill="x",expand=True,padx=(0,8))
+        self.chat_input=tk.Entry(shell,bg="#03131d",fg=self.colors["text"],font=("Consolas",9),relief="flat",bd=0,insertbackground=self.colors["primary2"])
+        self.chat_input.pack(fill="x",padx=1,pady=1,ipady=12); self.chat_input.bind("<Return>",lambda e:self.send_chat_message()); self.chat_input.bind("<Button-3>",self.show_input_menu); self.chat_input.bind("<Control-a>",lambda e:self.select_all_input()); self.chat_input.bind("<Control-c>",lambda e:self.copy_input_text()); self.chat_input.bind("<Control-v>",lambda e:self.paste_input_text()); self.chat_input.bind("<Control-x>",lambda e:self.cut_input_text())
+        self.send_button=self._button(bottom,"TRANSMIT  ▶",self.send_chat_message,accent=True); self.send_button.pack(side="right")
+        self.input_menu=Menu(self.root,tearoff=0,bg=self.colors["panel2"],fg=self.colors["text"],activebackground="#0b4f65",bd=0)
+        self.input_menu.add_command(label="CUT",command=self.cut_input_text); self.input_menu.add_command(label="COPY",command=self.copy_input_text); self.input_menu.add_command(label="PASTE",command=self.paste_input_text); self.input_menu.add_separator(); self.input_menu.add_command(label="CLEAR",command=self.clear_input_text); self.input_menu.add_command(label="SELECT ALL",command=self.select_all_input)
+        hello_msg=(f"{T('mita_greeting')}\n{T('mita_mode')}{get_mode_name(_mita_mode)}\n{T('mita_corrector')}{T('corrector_off_info') if not _text_corrector_enabled else T('corrector_on_info')}\n{T('mita_lang')}\n{T('mita_help')}")
+        self.add_chat_message("Мита",hello_msg,is_mita=True)
 
     def build_commands_page(self):
-        page = self._page()
-        self.pages[2] = page
-        head = tk.Frame(page, bg=self.colors["bg2"])
-        head.pack(fill="x", padx=24, pady=(22,12))
-        tk.Label(head, text="Команды MITA", font=("Segoe UI", 20, "bold"),
-                 bg=self.colors["bg2"], fg=self.colors["text"]).pack(anchor="w")
-        tk.Label(head, text="Говори естественно — MITA понимает русские и украинские команды.",
-                 font=("Segoe UI", 9), bg=self.colors["bg2"],
-                 fg=self.colors["muted"]).pack(anchor="w", pady=(3,0))
-
-        wrap = tk.Frame(page, bg=self.colors["bg2"])
-        wrap.pack(fill="both", expand=True, padx=24, pady=(0,20))
-        wrap.columnconfigure(0, weight=1)
-        wrap.columnconfigure(1, weight=1)
-
-        commands = [
-            ("🚀", "Запусти", "[программа]", "Discord, Roblox, Steam, Telegram и др."),
-            ("🌐", "Открой", "[сайт]", "YouTube, TikTok, Google, GitHub и др."),
-            ("✕", "Закрой", "[программа]", "Закрывает приложение через процесс."),
-            ("⌨", "Напиши", "[текст]", "Печатает текст в активное окно."),
-            ("▣", "Сверни все", "", "Сворачивает все окна Windows."),
-            ("▤", "Скриншот", "", "Делает снимок экрана."),
-            ("◉", "Скопируй / Вставь", "", "Ctrl+C / Ctrl+V."),
-            ("↔", "Переведи", "[на 1/2 монитор]", "Перемещает окно между мониторами."),
-            ("♫", "Песня", "[название]", "Ищет локальную музыку или YouTube."),
-            ("🔊", "Громкость", "[0-200%]", "Изменяет громкость музыки."),
-            ("⏹", "Стоп музыка", "", "Останавливает текущий трек."),
-            ("🌍", "Смени язык", "", "Меняет системную раскладку/язык."),
-        ]
-        for i, (icon, title, tail, desc) in enumerate(commands):
-            c = self._card(wrap)
-            r, col = divmod(i, 2)
-            c.grid(row=r, column=col, sticky="nsew", padx=(0 if col==0 else 8, 8 if col==0 else 0),
-                   pady=5)
-            c.grid_propagate(False)
-            c.config(height=78)
-            row = tk.Frame(c, bg=self.colors["panel"])
-            row.pack(fill="both", expand=True, padx=12, pady=10)
-            tk.Label(row, text=icon, font=("Segoe UI", 17),
-                     bg=self.colors["panel"], fg=self.colors["primary2"]).pack(side="left", padx=(2,10))
-            txt = tk.Frame(row, bg=self.colors["panel"])
-            txt.pack(fill="both", expand=True)
-            tk.Label(txt, text=f"{title} {tail}".strip(),
-                     font=("Segoe UI", 9, "bold"), bg=self.colors["panel"],
-                     fg=self.colors["text"]).pack(anchor="w")
-            tk.Label(txt, text=desc, font=("Segoe UI", 7),
-                     bg=self.colors["panel"], fg=self.colors["muted"]).pack(anchor="w", pady=(3,0))
+        page=self._page(); self.pages[2]=page
+        head=tk.Frame(page,bg=self.colors["bg2"]); head.pack(fill="x",padx=16,pady=(15,8))
+        tk.Label(head,text="COMMAND PROTOCOLS",font=("Consolas",14,"bold"),bg=self.colors["bg2"],fg=self.colors["text"]).pack(anchor="w")
+        tk.Label(head,text="AUTHORIZED VOICE / SYSTEM OPERATIONS",font=("Consolas",7,"bold"),bg=self.colors["bg2"],fg=self.colors["muted"]).pack(anchor="w",pady=(2,0))
+        wrap=tk.Frame(page,bg=self.colors["bg2"]); wrap.pack(fill="both",expand=True,padx=16,pady=(0,14)); wrap.columnconfigure(0,weight=1); wrap.columnconfigure(1,weight=1); wrap.columnconfigure(2,weight=1)
+        commands=[("01","LAUNCH","Запусти [программа]","Discord / Roblox / Steam"),("02","WEB RELAY","Открой [сайт]","YouTube / Google / GitHub"),("03","TERMINATE","Закрой [программа]","Process shutdown"),("04","TYPE","Напиши [текст]","Input to active window"),("05","MINIMIZE","Сверни все","Windows desktop control"),("06","CAPTURE","Скриншот","Screen snapshot"),("07","CLIPBOARD","Скопируй / Вставь","Ctrl+C / Ctrl+V"),("08","DISPLAY ROUTE","Переведи на 1/2 монитор","Move active window"),("09","AUDIO QUERY","Песня [название]","Local / YouTube search"),("10","AUDIO GAIN","Громкость [0-200%]","Music volume"),("11","AUDIO STOP","Стоп музыка","Terminate stream"),("12","LANGUAGE","Смени язык","Keyboard language")]
+        for i,(code,title,cmd,desc) in enumerate(commands):
+            c=self._card(wrap,title,"PROTO "+code); r,col=divmod(i,3); c.grid(row=r,column=col,sticky="nsew",padx=4,pady=4); inner=c.winfo_children()[0]
+            box=tk.Frame(inner,bg=self.colors["panel"]); box.pack(fill="both",expand=True,padx=11,pady=(2,10))
+            tk.Label(box,text=cmd,font=("Consolas",8,"bold"),bg=self.colors["panel"],fg=self.colors["primary2"]).pack(anchor="w")
+            tk.Label(box,text=desc,font=("Consolas",6),bg=self.colors["panel"],fg=self.colors["muted"]).pack(anchor="w",pady=(3,0))
 
     def build_settings_page(self):
-        page = self._page()
-        self.pages[3] = page
+        page=self._page(); self.pages[3]=page
+        head=tk.Frame(page,bg=self.colors["bg2"]); head.pack(fill="x",padx=16,pady=(15,8))
+        tk.Label(head,text="SYSTEM CONFIGURATION",font=("Consolas",14,"bold"),bg=self.colors["bg2"],fg=self.colors["text"]).pack(anchor="w")
+        tk.Label(head,text="OPERATOR-LEVEL PREFERENCES / SECURE LOCAL STATE",font=("Consolas",7,"bold"),bg=self.colors["bg2"],fg=self.colors["muted"]).pack(anchor="w",pady=(2,0))
+        scroll=tk.Frame(page,bg=self.colors["bg2"]); scroll.pack(fill="both",expand=True,padx=16,pady=(0,14)); scroll.columnconfigure(0,weight=1); scroll.columnconfigure(1,weight=1)
 
-        head = tk.Frame(page, bg=self.colors["bg2"])
-        head.pack(fill="x", padx=24, pady=(22,12))
-        tk.Label(head, text="Настройки", font=("Segoe UI", 20, "bold"),
-                 bg=self.colors["bg2"], fg=self.colors["text"]).pack(anchor="w")
-        tk.Label(head, text="Персонализируй голос, язык, режим и музыку.",
-                 font=("Segoe UI", 9), bg=self.colors["bg2"],
-                 fg=self.colors["muted"]).pack(anchor="w", pady=(3,0))
+        lang=self._card(scroll,"LANGUAGE MATRIX","INTERFACE"); lang.grid(row=0,column=0,sticky="nsew",padx=(0,5),pady=5); li=lang.winfo_children()[0]
+        lf=tk.Frame(li,bg=self.colors["panel"]); lf.pack(fill="x",padx=12,pady=(3,10))
+        tk.Label(lf,text="Active locale / response language",font=("Consolas",7),bg=self.colors["panel"],fg=self.colors["muted"]).pack(anchor="w",pady=(0,7))
+        self.lang_button=self._button(lf,"SWITCH → "+("УКРАЇНСЬКА" if UI_LANGUAGE=="ru" else "РУССКИЙ"),self.toggle_language); self.lang_button.pack(fill="x")
 
-        scroll = tk.Frame(page, bg=self.colors["bg2"])
-        scroll.pack(fill="both", expand=True, padx=24, pady=(0,20))
+        mode=self._card(scroll,"AI PROCESSING MODE","CORE"); mode.grid(row=0,column=1,sticky="nsew",padx=(5,0),pady=5); mi=mode.winfo_children()[0]
+        self.mode_setting_label=tk.Label(mi,text=get_mode_name(_mita_mode),font=("Consolas",9,"bold"),bg=self.colors["panel"],fg=self.colors["primary2"]); self.mode_setting_label.pack(anchor="w",padx=12,pady=(3,7))
+        self._button(mi,"CHANGE PROCESSING PROTOCOL",self.change_mode).pack(fill="x",padx=10,pady=(0,10))
 
-        # Language
-        lang = self._card(scroll, "LANGUAGE", "INTERFACE")
-        lang.pack(fill="x", pady=5)
-        lr = tk.Frame(lang, bg=self.colors["panel"])
-        lr.pack(fill="x", padx=16, pady=14)
-        self.lang_button = self._button(lr,
-            "🇺🇦 Українська" if UI_LANGUAGE == "ru" else "🇷🇺 Русский",
-            self.toggle_language)
-        self.lang_button.pack(side="right")
-        tk.Label(lr, text="Язык интерфейса", font=("Segoe UI", 10, "bold"),
-                 bg=self.colors["panel"], fg=self.colors["text"]).pack(side="left")
-        tk.Label(lr, text="RU / UA", font=("Segoe UI", 8),
-                 bg=self.colors["panel"], fg=self.colors["muted"]).pack(side="left", padx=12)
+        music=self._card(scroll,"AUDIO GAIN CONTROL","0-200%"); music.grid(row=1,column=0,columnspan=2,sticky="nsew",pady=5); mui=music.winfo_children()[0]
+        mv=tk.Frame(mui,bg=self.colors["panel"]); mv.pack(fill="x",padx=12,pady=(3,10))
+        self.volume_label=tk.Label(mv,text=f"AUDIO GAIN: {_music_volume}%",font=("Consolas",8,"bold"),bg=self.colors["panel"],fg=self.colors["text"]); self.volume_label.pack(anchor="w")
+        self.volume_scale=tk.Scale(mv,from_=0,to=200,orient=tk.HORIZONTAL,bg=self.colors["panel"],fg=self.colors["primary2"],activebackground=self.colors["primary"],troughcolor="#092b39",highlightthickness=0,bd=0,showvalue=False,sliderrelief="flat",sliderlength=16,command=self.on_volume_change); self.volume_scale.pack(fill="x",pady=(6,0)); self.volume_scale.set(_music_volume)
 
-        # Mode
-        mode = self._card(scroll, "AI MODE", "CORE")
-        mode.pack(fill="x", pady=5)
-        mr = tk.Frame(mode, bg=self.colors["panel"])
-        mr.pack(fill="x", padx=16, pady=14)
-        self.mode_setting_label = tk.Label(mr, text=get_mode_name(_mita_mode),
-                                           font=("Segoe UI", 10, "bold"),
-                                           bg=self.colors["panel"], fg=self.colors["primary2"])
-        self.mode_setting_label.pack(side="left")
-        self._button(mr, T("change_mode"), self.change_mode).pack(side="right")
-
-        # Music
-        music = self._card(scroll, "MUSIC", "AUDIO")
-        music.pack(fill="x", pady=5)
-        mv = tk.Frame(music, bg=self.colors["panel"])
-        mv.pack(fill="x", padx=16, pady=12)
-        self.volume_label = tk.Label(mv, text=f"🔊 {T('volume')}: {_music_volume}%",
-                                      font=("Segoe UI", 9, "bold"),
-                                      bg=self.colors["panel"], fg=self.colors["text"])
-        self.volume_label.pack(anchor="w")
-        self.volume_scale = tk.Scale(
-            mv, from_=0, to=200, orient=tk.HORIZONTAL,
-            bg=self.colors["panel"], fg=self.colors["primary2"],
-            activebackground=self.colors["primary"], troughcolor=self.colors["panel3"],
-            highlightthickness=0, bd=0, showvalue=False,
-            command=self.on_volume_change
-        )
-        self.volume_scale.pack(fill="x", pady=(7,0))
-        self.volume_scale.set(_music_volume)
-
-        # Key
-        access = self._card(scroll, "ACCESS", "SECURITY")
-        access.pack(fill="x", pady=5)
-        ar = tk.Frame(access, bg=self.colors["panel"])
-        ar.pack(fill="x", padx=16, pady=12)
-        self.settings_key_label = tk.Label(ar, text="",
-                                           font=("Segoe UI", 9, "bold"),
-                                           bg=self.colors["panel"], fg=self.colors["text"])
-        self.settings_key_label.pack(side="left")
-        self._button(ar, T("change_key"), self.change_key).pack(side="right")
-
-    # -------------------- pages/navigation --------------------
+        access=self._card(scroll,"ACCESS CREDENTIAL","SECURITY"); access.grid(row=2,column=0,columnspan=2,sticky="nsew",pady=5); ac=access.winfo_children()[0]
+        ar=tk.Frame(ac,bg=self.colors["panel"]); ar.pack(fill="x",padx=12,pady=(3,10))
+        self.settings_key_label=tk.Label(ar,text="",font=("Consolas",8,"bold"),bg=self.colors["panel"],fg=self.colors["text"]); self.settings_key_label.pack(side="left")
+        self._button(ar,"ROTATE ACCESS KEY",self.change_key).pack(side="right")
 
     def switch_tab(self, idx):
         self.current_tab = idx
         for i, (row, icon, label) in enumerate(self.nav_items):
             active = i == idx
-            bg = self.colors["panel3"] if active else self.colors["panel"]
-            fg = self.colors["text"] if active else self.colors["muted"]
+            bg = "#0a2b39" if active else self.colors["panel"]
+            fg = self.colors["primary2"] if active else self.colors["muted"]
             row.config(bg=bg)
             icon.config(bg=bg, fg=self.colors["primary2"] if active else self.colors["muted"])
             label.config(bg=bg, fg=fg)
@@ -1948,20 +1864,20 @@ class MisideInterface:
     def _build_core_art(self, w, h):
         c = self.core_canvas
         self.aura = []
-        for r, col in [(150,"#24172d"),(125,"#33203e"),(102,"#46234b"),(83,"#62295a")]:
+        for r, col in [(150,"#062332"),(125,"#07364a"),(102,"#084b64"),(83,"#096782")]:
             self.aura.append(c.create_oval(self.cx-r,self.cy-r,self.cx+r,self.cy+r,
                                            outline=col, width=1))
         self.core_outer = c.create_oval(self.cx-66,self.cy-66,self.cx+66,self.cy+66,
-                                        fill="#170e1e", outline=self.colors["primary"], width=2)
+                                        fill="#03131d", outline=self.colors["primary"], width=2)
         self.core_inner = c.create_oval(self.cx-51,self.cy-51,self.cx+51,self.cy+51,
-                                        fill="#211426", outline=self.colors["purple"], width=1)
+                                        fill="#062534", outline=self.colors["purple"], width=1)
         self.heart = self.create_heart(self.cx, self.cy, 40, self.colors["primary"])
         self.heart_glow = c.create_oval(self.cx-60,self.cy-60,self.cx+60,self.cy+60,
                                         outline=self.colors["primary"], width=2)
         self.orbit_elements = []
         for i in range(12):
             obj = c.create_text(self.cx,self.cy,text="✦",
-                                font=("Segoe UI", 8+(i%3),"bold"),
+                                font=("Consolas", 8+(i%3),"bold"),
                                 fill=self.colors["purple"])
             self.orbit_elements.append({
                 "id":obj, "angle":i*math.pi*2/12,
@@ -2102,13 +2018,21 @@ class MisideInterface:
     # -------------------- background --------------------
 
     def create_background(self):
-        self.canvas.delete("bg")
-        for y in range(self.H):
-            t=y/max(1,self.H-1)
-            r=int(8+4*t); g=int(9+3*t); b=int(13+8*t)
-            self.canvas.create_line(0,y,self.W,y,fill=f"#{r:02x}{g:02x}{b:02x}",tags="bg")
-        for x in range(-self.H,self.W,100):
-            self.canvas.create_line(x,0,x+self.H,self.H,fill="#0f1118",tags="bg")
+        c=self.canvas; c.delete("background")
+        w=max(self.W,self.root.winfo_width()); h=max(self.H,self.root.winfo_height())
+        # deep navy vertical gradient
+        for y in range(0,h,4):
+            t=y/max(1,h); r=int(1+2*t); g=int(8+9*t); b=int(13+15*t)
+            c.create_rectangle(0,y,w,y+4,fill=f"#{r:02x}{g:02x}{b:02x}",outline="",tags="background")
+        # technical grid and coordinates
+        for x in range(0,w+1,44): c.create_line(x,0,x,h,fill="#031b25",width=1,tags="background")
+        for y in range(0,h+1,44): c.create_line(0,y,w,y,fill="#031b25",width=1,tags="background")
+        for x in range(0,w+1,220): c.create_line(x,0,x,h,fill="#063246",width=1,tags="background")
+        for y in range(0,h+1,220): c.create_line(0,y,w,y,fill="#063246",width=1,tags="background")
+        random.seed(41)
+        for _ in range(60):
+            x=random.randint(5,w-5); y=random.randint(120,h-5); c.create_oval(x-1,y-1,x+1,y+1,fill="#0b5973",outline="",tags="background")
+        c.tag_lower("background")
 
     def create_particles(self):
         self.particles=[]
@@ -2147,12 +2071,12 @@ class MisideInterface:
         self.refresh_ui()
 
     def refresh_ui(self):
-        self.root.title(T("app_title"))
+        self.root.title("MITA // SECURE INTELLIGENCE CONSOLE")
         self.mode_button.config(text=T("change_mode"))
-        self.manual_record_button.config(text=T("manual_input_btn"))
-        self.tts_mute_button.config(text=T("voice_on") if not self.tts_muted else T("voice_off"))
-        self.corrector_button.config(text=T("corrector_on") if _text_corrector_enabled else T("corrector_off"))
-        self.lang_button.config(text="🇺🇦 Українська" if UI_LANGUAGE=="ru" else "🇷🇺 Русский")
+        self.manual_record_button.config(text="[ MIC ]  "+T("manual_input_btn"))
+        self.tts_mute_button.config(text="[ VOICE ]  "+(T("voice_on") if not self.tts_muted else T("voice_off")))
+        self.corrector_button.config(text="[ TEXT ]  "+(T("corrector_on") if _text_corrector_enabled else T("corrector_off")))
+        self.lang_button.config(text="SWITCH → "+("УКРАЇНСЬКА" if UI_LANGUAGE=="ru" else "РУССКИЙ"))
         self.change_key_btn.config(text=T("change_key"))
         self.music_stop_button.config(text=T("music_stop"))
         self.volume_label.config(text=f"🔊 {T('volume')}: {_music_volume}%")
@@ -2169,7 +2093,7 @@ class MisideInterface:
         set_text_corrector(self.corrector_enabled)
         self.corrector_button.config(
             text=T("corrector_on") if self.corrector_enabled else T("corrector_off"),
-            bg="#163b2a" if self.corrector_enabled else self.colors["panel3"],
+            bg="#06382c" if self.corrector_enabled else self.colors["panel3"],
             fg=self.colors["green"] if self.corrector_enabled else self.colors["text"]
         )
         msg=T("corrector_on_text") if self.corrector_enabled else T("corrector_off_text")
@@ -2184,10 +2108,10 @@ class MisideInterface:
         dialog.resizable(False,False)
         dialog.transient(self.root); dialog.grab_set()
 
-        tk.Label(dialog,text="AI MODE",font=("Segoe UI",9,"bold"),
+        tk.Label(dialog,text="AI MODE",font=("Consolas",9,"bold"),
                  bg=self.colors["bg"],fg=self.colors["dim"]).pack(pady=(24,3))
         tk.Label(dialog,text="Как MITA должна обрабатывать команды?",
-                 font=("Segoe UI",16,"bold"),bg=self.colors["bg"],fg=self.colors["text"]).pack(pady=(0,18))
+                 font=("Consolas",16,"bold"),bg=self.colors["bg"],fg=self.colors["text"]).pack(pady=(0,18))
 
         var=tk.StringVar(value=_mita_mode)
         modes=[
@@ -2199,12 +2123,12 @@ class MisideInterface:
             card=tk.Frame(dialog,bg=self.colors["panel"],highlightbackground=self.colors["line"],highlightthickness=1)
             card.pack(fill="x",padx=30,pady=5)
             rb=tk.Radiobutton(card,text=label,variable=var,value=mode,
-                              font=("Segoe UI",10,"bold"),bg=self.colors["panel"],
+                              font=("Consolas",10,"bold"),bg=self.colors["panel"],
                               fg=self.colors["text"],selectcolor=self.colors["panel3"],
                               activebackground=self.colors["panel"],activeforeground=self.colors["primary2"],
                               relief="flat",bd=0)
             rb.pack(anchor="w",padx=12,pady=(9,2))
-            tk.Label(card,text=desc,font=("Segoe UI",8),bg=self.colors["panel"],
+            tk.Label(card,text=desc,font=("Consolas",8),bg=self.colors["panel"],
                      fg=self.colors["muted"]).pack(anchor="w",padx=34,pady=(0,9))
 
         def apply():
@@ -3354,3 +3278,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
