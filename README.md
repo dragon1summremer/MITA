@@ -885,7 +885,7 @@ def stop_tts():
 # GROQ API
 # ============================================================
 
-GROQ_API_KEY = os.getenv("GROQ_API_KEY", "").strip()
+GROQ_API_KEY =  "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"
 client = Groq(api_key=GROQ_API_KEY) if GROQ_API_KEY else None
 
 def ask_groq(question):
