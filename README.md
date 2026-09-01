@@ -1569,7 +1569,7 @@ class MisideInterface:
             50, 377, 58, 385, fill=self.colors["cyan"], outline=""
         )
         self.engine_text = self.canvas.create_text(
-            68, 381, text="Sherpa ONNX",
+            68, 381, text="СЕНЬОР AI",
             font=("Arial", 8, "bold"), fill=self.colors["text"], anchor="w"
         )
         self.canvas.create_text(
