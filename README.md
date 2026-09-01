@@ -1573,7 +1573,7 @@ class MisideInterface:
             font=("Arial", 8, "bold"), fill=self.colors["text"], anchor="w"
         )
         self.canvas.create_text(
-            50, 399, text="RU / UA • HOTWORD",
+            50, 399, text="RU / UA • ",
             font=("Arial", 7), fill=self.colors["muted"], anchor="w"
         )
 
