@@ -137,7 +137,7 @@ def T(key: str) -> str:
         "nav_commands": {"ru": "Команды", "ua": "Команди"},
         "nav_settings": {"ru": "Настройки", "ua": "Налаштування"},
         "voice_engine": {"ru": "VOICE ENGINE", "ua": "ГОЛОСОВИЙ РУШІЙ"},
-        "hotword": {"ru": "HOTWORD", "ua": "КЛЮЧОВЕ СЛОВО"},
+        "hotword": {"ru": "NO", "ua": "КЛЮЧОВЕ СЛОВО"},
         "mode": {"ru": "РЕЖИМ РАБОТЫ", "ua": "РЕЖИМ РОБОТИ"},
         "change_mode": {"ru": "🔄 Сменить режим", "ua": "🔄 Змінити режим"},
         "manual_input": {"ru": "РУЧНОЙ ВВОД", "ua": "РУЧНЕ ВВЕДЕННЯ"},
@@ -1567,10 +1567,6 @@ class MisideInterface:
         )
         self.engine_dot = self.canvas.create_oval(
             50, 377, 58, 385, fill=self.colors["cyan"], outline=""
-        )
-        self.engine_text = self.canvas.create_text(
-            68, 381, text="СЕНЬОР AI",
-            font=("Arial", 8, "bold"), fill=self.colors["text"], anchor="w"
         )
         self.canvas.create_text(
             50, 399, text="RU / UA • ",
