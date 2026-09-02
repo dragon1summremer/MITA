@@ -69,6 +69,404 @@ BASE_DIR = get_base_path()
 
 
 # ============================================================
+# СТАРТОВАЯ ПРОВЕРКА ФАЙЛОВ И ПАПОК
+# ============================================================
+
+def startup_environment_check():
+    """
+    Стартовое окно проверки.
+    У КАЖДОГО отсутствующего элемента своя кнопка "СОЗДАТЬ".
+    Пока есть отсутствующие обязательные папки — продолжить нельзя.
+    Если закрыть окно — программа полностью завершится.
+    """
+
+    required_items = [
+        {
+            "name": "MitaApps",
+            "path": os.path.join(BASE_DIR, "MitaApps"),
+            "type": "folder",
+            "required": True,
+        },
+        {
+            "name": "music",
+            "path": os.path.join(BASE_DIR, "music"),
+            "type": "folder",
+            "required": True,
+        },
+        {
+            "name": "sounds",
+            "path": os.path.join(BASE_DIR, "sounds"),
+            "type": "folder",
+            "required": True,
+        },
+        {
+            "name": "YouCookie",
+            "path": os.path.join(BASE_DIR, "YouCookie"),
+            "type": "folder",
+            "required": True,
+        },
+        {
+            "name": "cookies.txt",
+            "path": os.path.join(BASE_DIR, "YouCookie", "cookies.txt"),
+            "type": "file",
+            "required": False,
+        },
+    ]
+
+    root = tk.Tk()
+    root.title("MITA — проверка перед запуском")
+    root.geometry("920x590")
+    root.minsize(760, 500)
+    root.configure(bg="#0f131b")
+
+    result = {"allow": False}
+    rows = {}
+
+    title = tk.Label(
+        root,
+        text="ПРОВЕРКА ПЕРЕД ЗАПУСКОМ",
+        font=("Segoe UI", 21, "bold"),
+        fg="#ffffff",
+        bg="#0f131b",
+    )
+    title.pack(pady=(22, 4))
+
+    subtitle = tk.Label(
+        root,
+        text="Мита проверяет необходимые папки и файлы",
+        font=("Segoe UI", 10),
+        fg="#9ca7b8",
+        bg="#0f131b",
+    )
+    subtitle.pack(pady=(0, 16))
+
+    body = tk.Frame(
+        root,
+        bg="#171d27",
+        highlightthickness=1,
+        highlightbackground="#303847",
+    )
+    body.pack(fill="both", expand=True, padx=22, pady=(0, 12))
+
+    header = tk.Frame(body, bg="#171d27")
+    header.pack(fill="x", padx=16, pady=(14, 7))
+
+    tk.Label(
+        header,
+        text="СТАТУС",
+        width=14,
+        anchor="w",
+        font=("Segoe UI", 9, "bold"),
+        fg="#8e9aab",
+        bg="#171d27",
+    ).grid(row=0, column=0, sticky="w")
+
+    tk.Label(
+        header,
+        text="ЭЛЕМЕНТ",
+        width=16,
+        anchor="w",
+        font=("Segoe UI", 9, "bold"),
+        fg="#8e9aab",
+        bg="#171d27",
+    ).grid(row=0, column=1, sticky="w")
+
+    tk.Label(
+        header,
+        text="ПУТЬ",
+        anchor="w",
+        font=("Segoe UI", 9, "bold"),
+        fg="#8e9aab",
+        bg="#171d27",
+    ).grid(row=0, column=2, sticky="w")
+
+    tk.Label(
+        header,
+        text="ДЕЙСТВИЕ",
+        width=16,
+        anchor="center",
+        font=("Segoe UI", 9, "bold"),
+        fg="#8e9aab",
+        bg="#171d27",
+    ).grid(row=0, column=3, sticky="e")
+
+    separator = tk.Frame(body, height=1, bg="#343d4d")
+    separator.pack(fill="x", padx=16)
+
+    rows_frame = tk.Frame(body, bg="#171d27")
+    rows_frame.pack(fill="both", expand=True, padx=16, pady=8)
+    rows_frame.grid_columnconfigure(2, weight=1)
+
+    def item_exists(item):
+        path = item["path"]
+        if item["type"] == "folder":
+            return os.path.isdir(path)
+        return os.path.isfile(path)
+
+    def create_item(item):
+        try:
+            if item["type"] == "folder":
+                os.makedirs(item["path"], exist_ok=True)
+            else:
+                parent = os.path.dirname(item["path"])
+                if parent:
+                    os.makedirs(parent, exist_ok=True)
+                if not os.path.exists(item["path"]):
+                    with open(item["path"], "w", encoding="utf-8") as f:
+                        f.write("")
+
+            refresh_all()
+
+            if item["type"] == "file":
+                messagebox.showinfo(
+                    "Файл создан",
+                    "Файл cookies.txt создан.\n\n"
+                    "Важно: он пока пустой. Для работы YouTube нужно вставить "
+                    "в него настоящие cookies.",
+                    parent=root,
+                )
+        except Exception as e:
+            messagebox.showerror(
+                "Ошибка",
+                f"Не удалось создать:\n{item['path']}\n\n{e}",
+                parent=root,
+            )
+            refresh_all()
+
+    for index, item in enumerate(required_items):
+        row = tk.Frame(rows_frame, bg="#171d27")
+        row.grid(row=index, column=0, columnspan=4, sticky="ew", pady=4)
+        row.grid_columnconfigure(2, weight=1)
+
+        status_label = tk.Label(
+            row,
+            text="",
+            width=14,
+            anchor="w",
+            font=("Segoe UI", 10, "bold"),
+            bg="#171d27",
+        )
+        status_label.grid(row=0, column=0, sticky="w")
+
+        name_text = item["name"]
+        if not item["required"]:
+            name_text += "  (доп.)"
+
+        name_label = tk.Label(
+            row,
+            text=name_text,
+            width=16,
+            anchor="w",
+            font=("Segoe UI", 10),
+            fg="#ffffff",
+            bg="#171d27",
+        )
+        name_label.grid(row=0, column=1, sticky="w")
+
+        path_label = tk.Label(
+            row,
+            text=item["path"],
+            anchor="w",
+            justify="left",
+            font=("Consolas", 9),
+            fg="#c9d2df",
+            bg="#171d27",
+        )
+        path_label.grid(row=0, column=2, sticky="ew", padx=(4, 12))
+
+        create_button = tk.Button(
+            row,
+            text="СОЗДАТЬ",
+            width=14,
+            height=1,
+            font=("Segoe UI", 9, "bold"),
+            bg="#6d5dfc",
+            fg="#ffffff",
+            activebackground="#8173ff",
+            activeforeground="#ffffff",
+            disabledforeground="#8590a0",
+            relief="flat",
+            cursor="hand2",
+            command=lambda current=item: create_item(current),
+        )
+        create_button.grid(row=0, column=3, sticky="e")
+
+        rows[item["name"]] = {
+            "item": item,
+            "status": status_label,
+            "button": create_button,
+        }
+
+    info = tk.Label(
+        body,
+        text="",
+        anchor="w",
+        justify="left",
+        font=("Segoe UI", 9),
+        fg="#9ca7b8",
+        bg="#171d27",
+    )
+    info.pack(fill="x", padx=16, pady=(3, 12))
+
+    bottom_status = tk.Label(
+        root,
+        text="",
+        font=("Segoe UI", 10, "bold"),
+        fg="#ffffff",
+        bg="#0f131b",
+    )
+    bottom_status.pack(pady=(0, 8))
+
+    buttons = tk.Frame(root, bg="#0f131b")
+    buttons.pack(pady=(0, 18))
+
+    continue_btn = tk.Button(
+        buttons,
+        text="ПРОДОЛЖИТЬ",
+        width=20,
+        height=2,
+        font=("Segoe UI", 10, "bold"),
+        bg="#22a06b",
+        fg="#ffffff",
+        activebackground="#2ab77c",
+        activeforeground="#ffffff",
+        disabledforeground="#808995",
+        relief="flat",
+        cursor="hand2",
+    )
+    continue_btn.grid(row=0, column=0, padx=6)
+
+    close_btn = tk.Button(
+        buttons,
+        text="ЗАКРЫТЬ",
+        width=16,
+        height=2,
+        font=("Segoe UI", 10, "bold"),
+        bg="#b42318",
+        fg="#ffffff",
+        activebackground="#d92d20",
+        activeforeground="#ffffff",
+        relief="flat",
+        cursor="hand2",
+    )
+    close_btn.grid(row=0, column=1, padx=6)
+
+    def refresh_all():
+        missing_required = []
+
+        for data in rows.values():
+            item = data["item"]
+            exists = item_exists(item)
+
+            if exists:
+                data["status"].configure(
+                    text="✅ ПРОВЕРЕНО",
+                    fg="#64d99b",
+                )
+                data["button"].configure(
+                    text="ГОТОВО",
+                    state="disabled",
+                    bg="#293443",
+                    cursor="arrow",
+                )
+            else:
+                if item["required"]:
+                    data["status"].configure(
+                        text="❌ НЕТ",
+                        fg="#ff7168",
+                    )
+                    missing_required.append(item)
+                else:
+                    data["status"].configure(
+                        text="⚠ НЕТ",
+                        fg="#f0b65d",
+                    )
+
+                data["button"].configure(
+                    text="СОЗДАТЬ",
+                    state="normal",
+                    bg="#6d5dfc",
+                    cursor="hand2",
+                )
+
+        if missing_required:
+            names = ", ".join(item["name"] for item in missing_required)
+            bottom_status.configure(
+                text=f"❌ Нужно создать: {names}",
+                fg="#ff7168",
+            )
+            continue_btn.configure(
+                state="disabled",
+                bg="#293443",
+                cursor="arrow",
+            )
+        else:
+            bottom_status.configure(
+                text="✅ Все обязательные элементы проверены. Можно запускать Миту.",
+                fg="#64d99b",
+            )
+            continue_btn.configure(
+                state="normal",
+                bg="#22a06b",
+                cursor="hand2",
+            )
+
+        info.configure(
+            text="Папка программы: " + BASE_DIR +
+                 "\nЕсли cookies.txt отсутствует — его можно создать отдельной кнопкой. "
+                 "Для YouTube пустой файл потом нужно заполнить настоящими cookies."
+        )
+
+    def allow_start():
+        refresh_all()
+
+        missing = [
+            item for item in required_items
+            if item["required"] and not item_exists(item)
+        ]
+
+        if missing:
+            messagebox.showwarning(
+                "Запуск невозможен",
+                "Создайте все отсутствующие обязательные элементы.",
+                parent=root,
+            )
+            return
+
+        result["allow"] = True
+        root.destroy()
+
+    def close_program():
+        result["allow"] = False
+        root.destroy()
+
+    continue_btn.configure(command=allow_start)
+    close_btn.configure(command=close_program)
+    root.protocol("WM_DELETE_WINDOW", close_program)
+
+    refresh_all()
+
+    root.update_idletasks()
+    sw = root.winfo_screenwidth()
+    sh = root.winfo_screenheight()
+    ww = root.winfo_width()
+    wh = root.winfo_height()
+    x = max(0, (sw - ww) // 2)
+    y = max(0, (sh - wh) // 2)
+    root.geometry(f"+{x}+{y}")
+
+    root.mainloop()
+    return result["allow"]
+
+
+# Проверка запускается до основной программы.
+# Если пользователь закрыл окно — Мита не запускается.
+if not startup_environment_check():
+    print("❌ Старт отменён. Программа закрыта.")
+    sys.exit(0)
+
+
+# ============================================================
 # MITA LOCAL APPS — запуск ТОЛЬКО из папки MitaApps, без ИИ
 # ============================================================
 # Положи сюда .exe или .lnk нужных программ:
@@ -6217,4 +6615,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
