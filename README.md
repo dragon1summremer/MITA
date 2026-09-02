@@ -6398,16 +6398,178 @@ def launch_application(target_raw: str):
 
 
 def kill_application(target_raw: str):
-    target_clean = target_raw.lower().strip()
+    """
+    Закрывает приложение умно:
+    1) понимает сокращения вроде тг / дс / рб;
+    2) использует PROCESS_KILL_MAP;
+    3) если приложение найдено в MitaApps — берет его имя/алиасы;
+    4) если точного процесса нет — ищет максимально похожий запущенный процесс.
+    """
+    target_clean = str(target_raw or "").lower().strip()
+
+    if not target_clean:
+        return False
+
+    # Убираем мусор, который иногда остается после распознавания.
+    target_clean = re.sub(r"\s+", " ", target_clean).strip()
+    target_clean = target_clean.replace("мита ", "").replace("стелла ", "").strip()
+
+    # 1. Базовый словарь сокращений.
     app_key = APP_TRANSLIT_MAP.get(target_clean, target_clean)
-    exe_name = PROCESS_KILL_MAP.get(app_key, app_key)
-    if not exe_name.endswith(".exe"):
-        exe_name += ".exe"
+
+    # Дополнительные очень короткие варианты.
+    quick_aliases = {
+        "дс": "discord",
+        "д с": "discord",
+        "тг": "telegram",
+        "т г": "telegram",
+        "рб": "roblox",
+        "р б": "roblox",
+        "ст": "steam",
+        "сп": "spotify",
+    }
+    app_key = quick_aliases.get(target_clean, app_key)
+
+    # 2. Сначала известное имя процесса.
+    exe_candidates = []
+
+    mapped_exe = PROCESS_KILL_MAP.get(app_key)
+    if mapped_exe:
+        exe_candidates.append(mapped_exe)
+
+    mapped_launch_exe = APP_EXE_MAP.get(app_key)
+    if mapped_launch_exe:
+        exe_candidates.append(mapped_launch_exe)
+
+    # 3. Пробуем понять название через MitaApps.
+    try:
+        item, score = _find_mita_folder_app(target_clean)
+        if item and score >= 0.48:
+            item_name = item.get("name", "")
+            item_path = item.get("path", "")
+
+            if item_path.lower().endswith(".exe"):
+                exe_candidates.append(os.path.basename(item_path))
+
+            item_key = APP_TRANSLIT_MAP.get(item_name.lower(), item_name.lower())
+            if item_key in PROCESS_KILL_MAP:
+                exe_candidates.append(PROCESS_KILL_MAP[item_key])
+
+            # Для ярлыков Discord/Telegram/Roblox и т.д.
+            norm_item = _mita_app_norm(item_name)
+            known_by_name = {
+                "discord": "Discord.exe",
+                "telegram": "Telegram.exe",
+                "roblox": "RobloxPlayerBeta.exe",
+                "robloxstudio": "RobloxStudioBeta.exe",
+                "steam": "steam.exe",
+                "spotify": "Spotify.exe",
+                "chrome": "chrome.exe",
+                "obs": "obs64.exe",
+            }
+            for key, proc_name in known_by_name.items():
+                if key in norm_item:
+                    exe_candidates.append(proc_name)
+    except Exception as e:
+        print(f"[Mita Close] Ошибка MitaApps resolver: {e}")
+
+    # Уникальные кандидаты.
+    unique_candidates = []
+    seen = set()
+    for exe in exe_candidates:
+        if not exe:
+            continue
+        exe = str(exe).strip()
+        if not exe.lower().endswith(".exe"):
+            exe += ".exe"
+        low = exe.lower()
+        if low not in seen:
+            seen.add(low)
+            unique_candidates.append(exe)
+
     if not play_sound(f"close_{app_key}") and not play_sound("close"):
         play_sound("ok")
-    cmd = f'taskkill /F /IM "{exe_name}"'
-    result = subprocess.run(cmd, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-    return result.returncode == 0
+
+    # 4. Сначала taskkill по известным именам.
+    for exe_name in unique_candidates:
+        try:
+            result = subprocess.run(
+                ["taskkill", "/F", "/IM", exe_name],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            )
+            if result.returncode == 0:
+                print(f"[Mita Close] Закрыт процесс: {exe_name}")
+                return True
+        except Exception as e:
+            print(f"[Mita Close] taskkill {exe_name}: {e}")
+
+    # 5. Если точное имя не помогло — смотрим реальные запущенные процессы.
+    query_variants = {
+        _mita_app_norm(target_clean),
+        _mita_app_norm(app_key),
+    }
+
+    for exe_name in unique_candidates:
+        query_variants.add(_mita_app_norm(os.path.splitext(exe_name)[0]))
+
+    query_variants.discard("")
+
+    best_proc = None
+    best_score = 0.0
+
+    for proc in psutil.process_iter(["pid", "name", "exe"]):
+        try:
+            proc_name = proc.info.get("name") or ""
+            if not proc_name:
+                continue
+
+            proc_base = os.path.splitext(proc_name)[0]
+            proc_norm = _mita_app_norm(proc_base)
+
+            if not proc_norm:
+                continue
+
+            # Точное совпадение с одним из вариантов.
+            if proc_norm in query_variants:
+                best_proc = proc
+                best_score = 1.0
+                break
+
+            # Нечеткое совпадение.
+            score = 0.0
+            for q in query_variants:
+                if len(q) <= 2:
+                    continue
+                score = max(score, _mita_similarity(q, proc_norm))
+
+            if score > best_score:
+                best_score = score
+                best_proc = proc
+
+        except (psutil.NoSuchProcess, psutil.AccessDenied):
+            continue
+        except Exception:
+            continue
+
+    # Не закрываем случайный процесс при слабом совпадении.
+    if best_proc is not None and best_score >= 0.72:
+        try:
+            proc_name = best_proc.name()
+            best_proc.kill()
+            print(f"[Mita Close] Умно закрыт: {proc_name} | score={best_score:.2f}")
+            return True
+        except Exception as e:
+            print(f"[Mita Close] Не удалось kill PID {best_proc.pid}: {e}")
+
+    print(
+        f"[Mita Close] Не найден процесс для {target_raw!r} | "
+        f"app_key={app_key!r} | candidates={unique_candidates}"
+    )
+    play_sound("error")
+    return False
 
 
 def open_website(target_raw: str):
