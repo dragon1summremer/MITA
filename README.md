@@ -5,6 +5,8 @@ import random
 import re
 import time
 import string
+import difflib
+import unicodedata
 import subprocess
 import threading
 import webbrowser
@@ -20,7 +22,11 @@ import tkinter as tk
 from tkinter import scrolledtext, ttk, messagebox, Menu, filedialog
 import math
 import sys
+import urllib.request
+import urllib.parse
+import urllib.error
 from datetime import datetime, timedelta
+from pathlib import Path
 from groq import Groq
 
 # ============================================================
@@ -60,6 +66,458 @@ def get_base_path():
         return os.path.dirname(os.path.abspath(__file__))
 
 BASE_DIR = get_base_path()
+
+
+# ============================================================
+# MITA LOCAL APPS — запуск ТОЛЬКО из папки MitaApps, без ИИ
+# ============================================================
+# Положи сюда .exe или .lnk нужных программ:
+#   <папка со скриптом>/MitaApps/
+# Можно делать подпапки. Для установленных программ лучше класть ярлыки .lnk,
+# потому что простой перенос EXE из папки установленной программы иногда ломает её.
+MITA_APPS_DIR = os.path.join(BASE_DIR, "MitaApps")
+_MITA_APPS_INDEX = []
+_MITA_APPS_INDEX_TIME = 0.0
+_MITA_APPS_INDEX_TTL = 2.0
+
+_CYR_TO_LAT = {
+    "а":"a","б":"b","в":"v","г":"g","ґ":"g","д":"d","е":"e","ё":"yo","є":"ye",
+    "ж":"zh","з":"z","и":"i","і":"i","ї":"yi","й":"y","к":"k","л":"l","м":"m",
+    "н":"n","о":"o","п":"p","р":"r","с":"s","т":"t","у":"u","ф":"f","х":"h",
+    "ц":"ts","ч":"ch","ш":"sh","щ":"sch","ъ":"","ы":"y","ь":"","э":"e","ю":"yu","я":"ya"
+}
+
+# Частые варианты того, как английские звуки попадают в русское распознавание.
+_PHONETIC_REPLACEMENTS = (
+    ("wallpaper", "volpeyper"), ("wall paper", "volpeyper"),
+    ("lively", "liveli"), ("liveley", "liveli"),
+    ("discord", "diskord"), ("telegram", "telegram"),
+    ("spotify", "spotifay"), ("steam", "stim"),
+    ("chrome", "hrom"), ("firefox", "fayrfoks"),
+    ("roblox", "robloks"), ("launcher", "loncher"),
+)
+
+def _mita_translit(value):
+    s = str(value or "").lower()
+    return "".join(_CYR_TO_LAT.get(ch, ch) for ch in s)
+
+def _mita_app_norm(value):
+    s = str(value or "").lower().strip()
+    s = os.path.splitext(os.path.basename(s))[0]
+    s = _mita_translit(s)
+    for old, new in _PHONETIC_REPLACEMENTS:
+        s = s.replace(old, new)
+    s = re.sub(r"[^a-z0-9]+", "", s)
+    # Небольшая фонетическая нормализация: разные записи похожих звуков
+    for old, new in (
+        ("ye", "e"), ("yo", "o"), ("yu", "u"), ("ya", "a"),
+        ("sch", "sh"), ("zh", "j"), ("ch", "c"), ("ts", "c"),
+        ("ph", "f"), ("ck", "k"), ("qu", "kv"), ("w", "v"),
+        ("x", "ks"), ("oo", "u"), ("ee", "i"),
+    ):
+        s = s.replace(old, new)
+    # Повторные буквы распознавания не должны мешать: livellly -> lively
+    s = re.sub(r"(.)\\1+", r"\\1", s)
+    return s
+
+def _mita_bigrams(s):
+    if len(s) < 2:
+        return {s} if s else set()
+    return {s[i:i+2] for i in range(len(s)-1)}
+
+def _mita_similarity(a, b):
+    a = _mita_app_norm(a)
+    b = _mita_app_norm(b)
+    if not a or not b:
+        return 0.0
+    if a == b:
+        return 1.0
+    if a in b or b in a:
+        shorter = min(len(a), len(b))
+        longer = max(len(a), len(b))
+        return 0.86 + 0.12 * (shorter / max(1, longer))
+
+    seq = difflib.SequenceMatcher(None, a, b).ratio()
+    ag, bg = _mita_bigrams(a), _mita_bigrams(b)
+    dice = (2.0 * len(ag & bg) / (len(ag) + len(bg))) if ag and bg else 0.0
+
+    # Сильнее ценим начало слова: "ливили" -> "Lively Wallpaper"
+    prefix = 0.0
+    lim = min(len(a), len(b), 8)
+    same = 0
+    for i in range(lim):
+        if a[i] == b[i]:
+            same += 1
+        else:
+            break
+    if lim:
+        prefix = same / lim
+
+    return max(seq, 0.58 * seq + 0.27 * dice + 0.15 * prefix)
+
+def _ensure_mita_apps_dir():
+    try:
+        os.makedirs(MITA_APPS_DIR, exist_ok=True)
+    except Exception as e:
+        print(f"[Mita Folder Apps] Не удалось создать папку: {e}")
+
+def _build_mita_apps_index(force=False):
+    global _MITA_APPS_INDEX, _MITA_APPS_INDEX_TIME
+    _ensure_mita_apps_dir()
+    now = time.time()
+    if not force and _MITA_APPS_INDEX and now - _MITA_APPS_INDEX_TIME < _MITA_APPS_INDEX_TTL:
+        return _MITA_APPS_INDEX
+
+    items = []
+    try:
+        for root, _, files in os.walk(MITA_APPS_DIR):
+            for filename in files:
+                ext = os.path.splitext(filename)[1].lower()
+                if ext not in (".exe", ".lnk"):
+                    continue
+                path = os.path.join(root, filename)
+                display = os.path.splitext(filename)[0]
+                aliases = {display}
+
+                # Имя подпапки тоже участвует в поиске.
+                rel_root = os.path.relpath(root, MITA_APPS_DIR)
+                if rel_root != ".":
+                    aliases.add(os.path.basename(rel_root))
+                    aliases.add(os.path.basename(rel_root) + " " + display)
+
+                items.append({
+                    "name": display,
+                    "path": path,
+                    "aliases": list(aliases),
+                })
+    except Exception as e:
+        print(f"[Mita Folder Apps] Ошибка сканирования: {e}")
+
+    _MITA_APPS_INDEX = items
+    _MITA_APPS_INDEX_TIME = now
+    print(f"[Mita Folder Apps] Найдено приложений: {len(items)} | {MITA_APPS_DIR}")
+    return items
+
+def _find_mita_folder_app(spoken_name):
+    query = str(spoken_name or "").strip()
+    if not query:
+        return None, 0.0
+
+    best = None
+    best_score = 0.0
+    for item in _build_mita_apps_index(force=True):
+        score = 0.0
+        for alias in item.get("aliases", []):
+            score = max(score, _mita_similarity(query, alias))
+        if score > best_score:
+            best, best_score = item, score
+
+    if best:
+        print(f"[Mita Folder Match] {query!r} -> {best['name']!r} | score={best_score:.2f}")
+    return best, best_score
+
+def smart_launch_application(target_raw):
+    """Запускает приложение ТОЛЬКО из MitaApps. Groq/Steam/реестр не используются."""
+    target = str(target_raw or "").strip()
+    if not target:
+        return False, None
+
+    item, score = _find_mita_folder_app(target)
+    # Порог достаточно мягкий для голосовых ошибок, но не запускаем совсем случайные совпадения.
+    if not item or score < 0.48:
+        play_sound("error")
+        print(f"[Mita Folder Apps] Не найдено: {target!r}; best={score:.2f}")
+        return False, None
+
+    try:
+        os.startfile(item["path"])
+        print(f"[Mita Folder Apps] ЗАПУСК: {item['path']}")
+        return True, item["name"]
+    except Exception as e:
+        play_sound("error")
+        print(f"[Mita Folder Apps] Ошибка запуска {item['path']}: {e}")
+        return False, None
+
+def try_folder_app_voice_command(phrase, interface):
+    """Перехватывает команды запуска ДО ИИ-планировщика."""
+    text = str(phrase or "").lower().strip()
+    verbs = (
+        "запусти", "запустить", "включи", "включить", "открой", "открыть",
+        "увімкни", "відкрий", "відкрити", "запускай"
+    )
+    target = ""
+    for verb in verbs:
+        if text == verb:
+            return False
+        if text.startswith(verb + " "):
+            target = text[len(verb):].strip()
+            break
+    if not target:
+        return False
+
+    item, score = _find_mita_folder_app(target)
+    if not item or score < 0.48:
+        # Если команда явно "запусти/включи", считаем её обработанной и не даём ИИ
+        # угадывать другое приложение. Для "открой" оставляем шанс открыть сайт.
+        hard_launch = text.startswith(("запусти ", "запустить ", "включи ", "включить ", "увімкни ", "запускай "))
+        if hard_launch:
+            msg = T("app_not_found").format(target)
+            interface.add_chat_message("Мита", msg, is_mita=True)
+            speak(msg, force=True)
+            return True
+        return False
+
+    try:
+        os.startfile(item["path"])
+        msg = T("app_launching").format(item["name"])
+        interface.add_chat_message("Мита", msg, is_mita=True)
+        speak(msg, force=True)
+        print(f"[Mita Folder Voice] {target!r} -> {item['name']!r} ({score:.2f})")
+        return True
+    except Exception as e:
+        msg = T("app_not_found").format(target)
+        interface.add_chat_message("Мита", msg, is_mita=True)
+        speak(msg, force=True)
+        print(f"[Mita Folder Voice] Ошибка: {e}")
+        return True
+
+# ============================================================
+# MITA SMART WEATHER / IP GEOLOCATION ENGINE
+# ============================================================
+# Работает без API-ключа:
+#   1) определяет приблизительный город по публичному IP;
+#   2) берёт координаты;
+#   3) получает погоду Open-Meteo;
+#   4) кэширует результат, чтобы не делать лишние запросы.
+# Важно: геолокация по IP приблизительная и может указывать город провайдера/VPN.
+
+_WEATHER_CACHE = {
+    "created": 0.0,
+    "location": None,
+    "weather": None,
+    "report_ru": None,
+    "report_ua": None,
+}
+_WEATHER_CACHE_TTL = 600.0
+
+def _http_json(url: str, timeout: float = 6.0):
+    req = urllib.request.Request(
+        url,
+        headers={
+            "User-Agent": "MitaDesktopAssistant/4.0",
+            "Accept": "application/json",
+            "Cache-Control": "no-cache",
+        },
+        method="GET",
+    )
+    with urllib.request.urlopen(req, timeout=timeout) as response:
+        raw = response.read()
+    return json.loads(raw.decode("utf-8", errors="replace"))
+
+def _detect_location_by_ip():
+    """Определяет город/координаты по IP с несколькими резервными сервисами."""
+    errors = []
+    providers = [
+        (
+            "ipapi",
+            "https://ipapi.co/json/",
+            lambda d: {
+                "city": d.get("city") or "",
+                "region": d.get("region") or "",
+                "country": d.get("country_name") or d.get("country") or "",
+                "latitude": d.get("latitude"),
+                "longitude": d.get("longitude"),
+                "timezone": d.get("timezone") or "auto",
+                "ip": d.get("ip") or "",
+                "provider": "ipapi.co",
+            },
+        ),
+        (
+            "ipwho",
+            "https://ipwho.is/",
+            lambda d: {
+                "city": d.get("city") or "",
+                "region": d.get("region") or "",
+                "country": d.get("country") or "",
+                "latitude": d.get("latitude"),
+                "longitude": d.get("longitude"),
+                "timezone": (d.get("timezone") or {}).get("id", "auto") if isinstance(d.get("timezone"), dict) else "auto",
+                "ip": d.get("ip") or "",
+                "provider": "ipwho.is",
+            },
+        ),
+    ]
+    for name, url, parser in providers:
+        try:
+            data = _http_json(url, timeout=5.0)
+            if name == "ipwho" and data.get("success") is False:
+                raise RuntimeError(data.get("message") or "IP service returned failure")
+            loc = parser(data)
+            if loc.get("latitude") is None or loc.get("longitude") is None:
+                raise RuntimeError("Нет координат")
+            loc["latitude"] = float(loc["latitude"])
+            loc["longitude"] = float(loc["longitude"])
+            return loc
+        except Exception as e:
+            errors.append(f"{name}: {e}")
+    raise RuntimeError("Не удалось определить город по IP: " + " | ".join(errors[-2:]))
+
+def _weather_code_info(code: int, lang: str = "ru"):
+    table_ru = {
+        0:("ясно","☀"), 1:("преимущественно ясно","🌤"), 2:("переменная облачность","⛅"), 3:("пасмурно","☁"),
+        45:("туман","🌫"), 48:("изморозь и туман","🌫"),
+        51:("слабая морось","🌦"), 53:("морось","🌦"), 55:("сильная морось","🌧"),
+        56:("слабая ледяная морось","🌧"), 57:("ледяная морось","🌧"),
+        61:("небольшой дождь","🌦"), 63:("дождь","🌧"), 65:("сильный дождь","🌧"),
+        66:("ледяной дождь","🌧"), 67:("сильный ледяной дождь","🌧"),
+        71:("небольшой снег","🌨"), 73:("снег","❄"), 75:("сильный снег","❄"), 77:("снежные зёрна","🌨"),
+        80:("небольшие ливни","🌦"), 81:("ливни","🌧"), 82:("сильные ливни","⛈"),
+        85:("слабый снегопад","🌨"), 86:("сильный снегопад","❄"),
+        95:("гроза","⛈"), 96:("гроза с градом","⛈"), 99:("сильная гроза с градом","⛈"),
+    }
+    table_ua = {
+        0:("ясно","☀"), 1:("переважно ясно","🌤"), 2:("мінлива хмарність","⛅"), 3:("хмарно","☁"),
+        45:("туман","🌫"), 48:("паморозь і туман","🌫"),
+        51:("слабка мряка","🌦"), 53:("мряка","🌦"), 55:("сильна мряка","🌧"),
+        56:("слабка крижана мряка","🌧"), 57:("крижана мряка","🌧"),
+        61:("невеликий дощ","🌦"), 63:("дощ","🌧"), 65:("сильний дощ","🌧"),
+        66:("крижаний дощ","🌧"), 67:("сильний крижаний дощ","🌧"),
+        71:("невеликий сніг","🌨"), 73:("сніг","❄"), 75:("сильний сніг","❄"), 77:("снігові зерна","🌨"),
+        80:("невеликі зливи","🌦"), 81:("зливи","🌧"), 82:("сильні зливи","⛈"),
+        85:("слабкий снігопад","🌨"), 86:("сильний снігопад","❄"),
+        95:("гроза","⛈"), 96:("гроза з градом","⛈"), 99:("сильна гроза з градом","⛈"),
+    }
+    table = table_ua if lang == "ua" else table_ru
+    return table.get(int(code or -1), (("невідома погода" if lang == "ua" else "неизвестная погода"), "◌"))
+
+def _wind_direction_name(deg, lang="ru"):
+    try:
+        deg = float(deg) % 360
+    except Exception:
+        return ""
+    dirs_ru = ["северный","северо-восточный","восточный","юго-восточный","южный","юго-западный","западный","северо-западный"]
+    dirs_ua = ["північний","північно-східний","східний","південно-східний","південний","південно-західний","західний","північно-західний"]
+    arr = dirs_ua if lang == "ua" else dirs_ru
+    return arr[int((deg + 22.5) // 45) % 8]
+
+def _fetch_open_meteo(lat: float, lon: float):
+    params = {
+        "latitude": f"{lat:.6f}",
+        "longitude": f"{lon:.6f}",
+        "current": ",".join([
+            "temperature_2m", "apparent_temperature", "relative_humidity_2m",
+            "precipitation", "rain", "weather_code", "cloud_cover",
+            "surface_pressure", "wind_speed_10m", "wind_direction_10m", "wind_gusts_10m"
+        ]),
+        "daily": ",".join([
+            "weather_code", "temperature_2m_max", "temperature_2m_min",
+            "precipitation_probability_max", "wind_speed_10m_max"
+        ]),
+        "forecast_days": "4",
+        "timezone": "auto",
+        "wind_speed_unit": "kmh",
+    }
+    url = "https://api.open-meteo.com/v1/forecast?" + urllib.parse.urlencode(params)
+    return _http_json(url, timeout=7.0)
+
+def _format_weather_report(location, data, lang="ru", compact=False):
+    cur = data.get("current") or {}
+    daily = data.get("daily") or {}
+    city = location.get("city") or ("вашем городе" if lang == "ru" else "вашому місті")
+    region = location.get("region") or ""
+    temp = cur.get("temperature_2m")
+    feels = cur.get("apparent_temperature")
+    humidity = cur.get("relative_humidity_2m")
+    wind = cur.get("wind_speed_10m")
+    gust = cur.get("wind_gusts_10m")
+    wind_dir = _wind_direction_name(cur.get("wind_direction_10m"), lang)
+    clouds = cur.get("cloud_cover")
+    pressure = cur.get("surface_pressure")
+    precip = cur.get("precipitation")
+    desc, icon = _weather_code_info(cur.get("weather_code"), lang)
+
+    def n(v, digits=0, fallback="—"):
+        try:
+            return f"{float(v):.{digits}f}"
+        except Exception:
+            return fallback
+
+    if lang == "ua":
+        if compact:
+            return f"{icon} {city}: {n(temp,0)}°C, {desc}. Відчувається як {n(feels,0)}°C. Вологість {n(humidity)}%. Вітер {n(wind)} км/год."
+        report = (
+            f"{icon} Зараз у місті {city}" + (f", {region}" if region else "") +
+            f": {n(temp,0)}°C, {desc}. Відчувається як {n(feels,0)}°C. "
+            f"Вологість {n(humidity)}%, хмарність {n(clouds)}%. "
+            f"Вітер {wind_dir} {n(wind)} км/год" + (f", пориви до {n(gust)} км/год" if gust is not None else "") + ". "
+            f"Тиск приблизно {n(pressure)} гПа, опади {n(precip,1)} мм."
+        )
+    else:
+        if compact:
+            return f"{icon} {city}: {n(temp,0)}°C, {desc}. Ощущается как {n(feels,0)}°C. Влажность {n(humidity)}%. Ветер {n(wind)} км/ч."
+        report = (
+            f"{icon} Сейчас в городе {city}" + (f", {region}" if region else "") +
+            f": {n(temp,0)}°C, {desc}. Ощущается как {n(feels,0)}°C. "
+            f"Влажность {n(humidity)}%, облачность {n(clouds)}%. "
+            f"Ветер {wind_dir} {n(wind)} км/ч" + (f", порывы до {n(gust)} км/ч" if gust is not None else "") + ". "
+            f"Давление примерно {n(pressure)} гПа, осадки {n(precip,1)} мм."
+        )
+
+    # Короткий прогноз на завтра — полезная дополнительная фишка.
+    try:
+        if len(daily.get("time", [])) > 1:
+            code = daily.get("weather_code", [None, None])[1]
+            ddesc, dicon = _weather_code_info(code, lang)
+            tmin = daily.get("temperature_2m_min", [None, None])[1]
+            tmax = daily.get("temperature_2m_max", [None, None])[1]
+            rainp = daily.get("precipitation_probability_max", [None, None])[1]
+            if lang == "ua":
+                report += f" Завтра: {dicon} {ddesc}, від {n(tmin,0)}° до {n(tmax,0)}°, імовірність опадів до {n(rainp)}%."
+            else:
+                report += f" Завтра: {dicon} {ddesc}, от {n(tmin,0)}° до {n(tmax,0)}°, вероятность осадков до {n(rainp)}%."
+    except Exception:
+        pass
+    return report
+
+def get_local_weather(force=False, lang=None):
+    lang = lang or ("ua" if UI_LANGUAGE == "ua" else "ru")
+    now = time.time()
+    if (
+        not force and _WEATHER_CACHE.get("location") and _WEATHER_CACHE.get("weather") and
+        now - float(_WEATHER_CACHE.get("created") or 0) < _WEATHER_CACHE_TTL
+    ):
+        report_key = "report_ua" if lang == "ua" else "report_ru"
+        report = _WEATHER_CACHE.get(report_key)
+        if not report:
+            report = _format_weather_report(_WEATHER_CACHE["location"], _WEATHER_CACHE["weather"], lang)
+            _WEATHER_CACHE[report_key] = report
+        return {"ok": True, "location": _WEATHER_CACHE["location"], "weather": _WEATHER_CACHE["weather"], "report": report, "cached": True}
+
+    try:
+        location = _detect_location_by_ip()
+        weather = _fetch_open_meteo(location["latitude"], location["longitude"])
+        report_ru = _format_weather_report(location, weather, "ru")
+        report_ua = _format_weather_report(location, weather, "ua")
+        _WEATHER_CACHE.update({
+            "created": now, "location": location, "weather": weather,
+            "report_ru": report_ru, "report_ua": report_ua,
+        })
+        return {"ok": True, "location": location, "weather": weather, "report": report_ua if lang == "ua" else report_ru, "cached": False}
+    except urllib.error.URLError as e:
+        msg = "Нет доступа к интернету для получения погоды." if lang == "ru" else "Немає доступу до інтернету для отримання погоди."
+        return {"ok": False, "error": msg, "details": str(e)}
+    except Exception as e:
+        msg = "Не удалось определить местоположение или получить погоду." if lang == "ru" else "Не вдалося визначити місцезнаходження або отримати погоду."
+        return {"ok": False, "error": msg, "details": str(e)}
+
+def is_weather_request(text: str):
+    s = str(text or "").lower()
+    keys = [
+        "погода", "температура на улице", "температура на вулиці",
+        "сколько градусов", "скільки градусів", "что на улице", "що надворі",
+        "дождь сейчас", "дощ зараз", "какая температура", "яка температура"
+    ]
+    return any(k in s for k in keys)
 
 # Пути для поиска cookies
 COOKIES_DIR = os.path.join(BASE_DIR, "YouCookie")
@@ -363,48 +821,429 @@ def set_text_corrector(enabled: bool):
 def get_text_corrector():
     return _text_corrector_enabled
 
-def correct_text(text: str) -> str:
-    if not text or len(text.strip()) < 2:
+def _local_text_cleanup(text: str) -> str:
+    """Безопасная локальная обработка, если ИИ временно недоступен."""
+    if not text:
         return text
-    ui_lang = UI_LANGUAGE
-    lang_name = "українській" if ui_lang == "ua" else "русском"
-    lang_code = "ua" if ui_lang == "ua" else "ru"
+
+    result = str(text).strip()
+    result = re.sub(r'[ \t]+', ' ', result)
+    result = re.sub(r'\s+([,.;:!?])', r'\1', result)
+    result = re.sub(r'([,.;:!?])(?=[^\s\n])', r'\1 ', result)
+    result = re.sub(r'\s*\n\s*', '\n', result)
+    result = re.sub(r'\n{3,}', '\n\n', result)
+
+    # Не ломаем ссылки, e-mail, код, ID и прочие специальные строки.
+    if result and result[0].isalpha():
+        result = result[0].upper() + result[1:]
+
+    return result
+
+
+def _clean_corrector_answer(answer: str) -> str:
+    """Убирает служебный текст/markdown, если модель всё же его добавила."""
+    if not answer:
+        return ""
+
+    result = str(answer).strip()
+
+    # Удаляем markdown-кодовые блоки, но сохраняем их содержимое.
+    if result.startswith("```") and result.endswith("```"):
+        result = re.sub(r'^```[a-zA-Zа-яА-ЯёЁіїєґІЇЄҐ0-9_-]*\s*', '', result)
+        result = re.sub(r'\s*```$', '', result)
+
+    prefixes = [
+        "Вот исправленный текст:", "Исправленный текст:", "Исправленный вариант:",
+        "Вот исправленный вариант:", "Ось виправлений текст:", "Виправлений текст:",
+        "Виправлений варіант:", "Ось виправлений варіант:", "Corrected text:"
+    ]
+    lowered = result.lower()
+    for prefix in prefixes:
+        if lowered.startswith(prefix.lower()):
+            result = result[len(prefix):].strip()
+            break
+
+    # Убираем только внешние кавычки; кавычки внутри текста не трогаем.
+    if len(result) >= 2 and result[0] == result[-1] and result[0] in ('"', "'"):
+        result = result[1:-1].strip()
+
+    return result.strip()
+
+
+def _language_score(text: str):
+    """Простая проверка RU/UA для контроля результата перевода."""
+    s = " " + re.sub(r"[^а-яёіїєґ\\s'-]", " ", str(text or "").lower()) + " "
+
+    ua_score = 0
+    ru_score = 0
+
+    # Буквы, однозначно указывающие на язык.
+    ua_score += sum(s.count(ch) * 5 for ch in "іїєґ")
+    ru_score += sum(s.count(ch) * 5 for ch in "ыэёъ")
+
+    ua_words = [
+        " що ", " як ", " це ", " ти ", " він ", " вона ", " вони ", " ми ",
+        " сьогодні ", " вчора ", " завтра ", " робив ", " робила ", " робити ",
+        " привіт ", " дякую ", " будь ласка ", " добре ", " дуже ", " мене ",
+        " тебе ", " твій ", " твоя ", " твого ", " зараз ", " можна ", " треба "
+    ]
+    ru_words = [
+        " что ", " как ", " это ", " ты ", " он ", " она ", " они ", " мы ",
+        " сегодня ", " вчера ", " завтра ", " делал ", " делала ", " делать ",
+        " привет ", " спасибо ", " пожалуйста ", " хорошо ", " очень ", " меня ",
+        " тебя ", " твой ", " твоя ", " твоего ", " сейчас ", " можно ", " нужно "
+    ]
+    for w in ua_words:
+        if w in s:
+            ua_score += 3
+    for w in ru_words:
+        if w in s:
+            ru_score += 3
+
+    return ru_score, ua_score
+
+
+def _is_wrong_target_language(text: str, target_lang: str, source_text: str = "") -> bool:
+    """True, если результат явно остался на неправильном языке."""
+    ru, ua = _language_score(text)
+    src_ru, src_ua = _language_score(source_text)
+
+    if target_lang == "ru":
+        # Любые украинские уникальные буквы — недопустимы для русского результата.
+        if any(ch in str(text).lower() for ch in "іїєґ"):
+            return True
+        if ua > ru and ua >= 3:
+            return True
+        # Если исходник явно украинский и ответ почти не изменился — перевод не выполнен.
+        if src_ua > src_ru and str(text).strip().lower() == str(source_text).strip().lower():
+            return True
+    else:
+        # Русские уникальные буквы недопустимы для украинского результата.
+        if any(ch in str(text).lower() for ch in "ыэёъ"):
+            return True
+        if ru > ua and ru >= 3:
+            return True
+        if src_ru > src_ua and str(text).strip().lower() == str(source_text).strip().lower():
+            return True
+
+    return False
+
+
+def _finalize_ai_text(text: str, target_lang: str) -> str:
+    """Финальная страховка после ИИ: заглавная буква и конечный знак препинания."""
+    result = str(text or "").strip()
+    if not result:
+        return result
+
+    # Заглавная первая буквенная буква, не ломая emoji/кавычки/скобки в начале.
+    chars = list(result)
+    for i, ch in enumerate(chars):
+        if ch.isalpha():
+            chars[i] = ch.upper()
+            break
+    result = "".join(chars)
+
+    # Если ИИ забыл конечный знак, определяем вопрос по типичным вопросительным словам.
+    if result and result[-1] not in '.!?…':
+        lowered = result.lower().lstrip('«"\'([{ ')
+        question_words_ru = (
+            'что ', 'кто ', 'как ', 'где ', 'куда ', 'откуда ', 'когда ',
+            'почему ', 'зачем ', 'сколько ', 'какой ', 'какая ', 'какие ',
+            'чей ', 'чья ', 'можно ли ', 'ты ', 'вы '
+        )
+        question_words_ua = (
+            'що ', 'хто ', 'як ', 'де ', 'куди ', 'звідки ', 'коли ',
+            'чому ', 'навіщо ', 'скільки ', 'який ', 'яка ', 'які ',
+            'чий ', 'чия ', 'можна ', 'ти ', 'ви '
+        )
+        words = question_words_ua if target_lang == 'ua' else question_words_ru
+        result += '?' if lowered.startswith(words) else '.'
+
+    return result
+
+
+def _process_text_for_language(text: str, correct_errors: bool = True) -> str:
+    """
+    ЖЁСТКАЯ языковая логика:
+    - выбран RU -> печатаем ТОЛЬКО по-русски;
+    - выбран UA -> печатаем ТОЛЬКО по-украински;
+    - если вход на другом языке, обязательно переводим;
+    - результат проверяется, и при неверном языке перевод повторяется.
+    """
+    original = str(text or "").strip()
+    if not original:
+        return original
+
+    fallback = _local_text_cleanup(original)
+    target_lang = "ua" if get_ui_language() == "ua" else "ru"
+    target_name = "УКРАИНСКИЙ" if target_lang == "ua" else "РУССКИЙ"
+
+    if client is None:
+        print("[Язык текста] Groq недоступен — обязательный перевод невозможен")
+        return fallback
+
+    correction = (
+        "ОБЯЗАТЕЛЬНО исправь орфографию, грамматику, пунктуацию, регистр букв и очевидные ошибки распознавания речи. "
+        "Каждое предложение должно начинаться с заглавной буквы и заканчиваться подходящим знаком: точкой, вопросительным или восклицательным знаком. "
+        "Если фраза по смыслу является вопросом, обязательно поставь знак вопроса."
+        if correct_errors else
+        "Сохрани смысл и стиль, но всё равно оформи текст грамотно: нормальный регистр и конечная пунктуация."
+    )
+
+    # Несколько попыток: если модель вдруг оставила исходный язык, мы это обнаружим.
+    for attempt in range(3):
+        strict_note = ""
+        if attempt > 0:
+            strict_note = f"\nПРЕДЫДУЩАЯ ПОПЫТКА БЫЛА НА НЕВЕРНОМ ЯЗЫКЕ. ПЕРЕВЕДИ ВЕСЬ ТЕКСТ НА {target_name}."
+
+        system_prompt = f"""Ты выполняешь только перевод/коррекцию текста для голосового ассистента.
+
+КРИТИЧЕСКОЕ ТРЕБОВАНИЕ:
+ФИНАЛЬНЫЙ РЕЗУЛЬТАТ ДОЛЖЕН БЫТЬ ТОЛЬКО НА ЯЗЫКЕ: {target_name}.
+
+Если исходный текст на другом языке — ОБЯЗАТЕЛЬНО ПЕРЕВЕДИ ВЕСЬ ТЕКСТ НА {target_name}.
+Если исходный текст уже на {target_name} — сохрани этот язык.
+{correction}
+Сохрани смысл, тон, имена, числа, URL, e-mail, ID, никнеймы и emoji.
+Не отвечай на содержание текста. Не добавляй объяснений.
+ВАЖНО: итог должен выглядеть как полностью грамотный готовый текст: первая буква предложения — заглавная, в конце — правильный знак препинания.
+Если это вопрос по смыслу — в конце ОБЯЗАТЕЛЬНО должен быть знак вопроса.
+Верни ТОЛЬКО готовый текст без кавычек, markdown и префиксов.{strict_note}"""
+
+        try:
+            completion = client.chat.completions.create(
+                model="openai/gpt-oss-120b",
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": original}
+                ],
+                temperature=0.0,
+                max_completion_tokens=1024,
+                top_p=1,
+                reasoning_effort="low",
+                stream=False
+            )
+            result = _clean_corrector_answer(completion.choices[0].message.content)
+            if not result:
+                continue
+
+            result = _finalize_ai_text(result, target_lang)
+
+            if len(result) > max(len(original) * 4, len(original) + 300):
+                print("[Язык текста] Ответ отклонён: слишком длинный")
+                continue
+
+            if _is_wrong_target_language(result, target_lang, original):
+                print(f"[Язык текста] Попытка {attempt + 1}: модель оставила неверный язык, повторяю...")
+                continue
+
+            print(f"[Язык текста] target={target_lang} | {original!r} -> {result!r}")
+            return result.strip()
+
+        except Exception as e:
+            print(f"[Язык текста] Попытка {attempt + 1}, ошибка Groq: {e}")
+            time.sleep(0.15)
+
+    # Последняя сверхстрогая попытка отдельным запросом-переводом.
     try:
-        system_prompt = f"""Ты — ИСПРАВИТЕЛЬ ТЕКСТА.
-1. Язык ИНТЕРФЕЙСА: {lang_name} (код: {lang_code})
-2. Ты ДОЛЖЕН исправить текст ИМЕННО НА ЭТОМ ЯЗЫКЕ! {lang_name}!
-3. Если текст на другом языке - ПЕРЕВЕДИ на {lang_name}!
-4. Исправь все грамматические ошибки на этом языке
-5. Расставь правильные знаки препинания
-6. Исправь орфографию
-7. Сделай текст грамотным и читаемым
-8. НЕ добавляй лишние слова, НЕ перефразируй
-9. Верни ТОЛЬКО исправленный текст, без пояснений
-ОЧЕНЬ ВАЖНО: ВСЕГДА ОТВЕЧАЙ ТОЛЬКО НА {lang_name} ЯЗЫКЕ!"""
+        final_prompt = (
+            f"Переведи следующий текст ПОЛНОСТЬЮ на {'украинский' if target_lang == 'ua' else 'русский'} язык. "
+            "Одновременно исправь грамматику, орфографию, регистр и пунктуацию. "
+            "Начни предложение с заглавной буквы. Если это вопрос — обязательно поставь знак вопроса. "
+            "Верни только полностью готовый текст, без пояснений:\n\n" + original
+        )
         completion = client.chat.completions.create(
             model="openai/gpt-oss-120b",
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": f"Исправь этот текст на {lang_name} языке: {text}"}
-            ],
-            temperature=0.2,
-            max_completion_tokens=512,
+            messages=[{"role": "user", "content": final_prompt}],
+            temperature=0.0,
+            max_completion_tokens=1024,
             top_p=1,
             stream=False
         )
-        corrected = completion.choices[0].message.content.strip()
-        if not corrected or len(corrected) < 1:
-            return text
-        corrected = corrected.strip('"').strip("'")
-        if corrected.startswith('-') or corrected.startswith('*'):
-            corrected = corrected[1:].strip()
-        for prefix in ["Вот исправленный текст:", "Исправленный текст:",
-                       "Ось виправлений текст:", "Виправлений текст:"]:
-            if prefix in corrected:
-                corrected = corrected.split(prefix)[-1].strip()
-        return corrected if corrected else text
+        result = _clean_corrector_answer(completion.choices[0].message.content)
+        result = _finalize_ai_text(result, target_lang) if result else result
+        if result and not _is_wrong_target_language(result, target_lang, original):
+            print(f"[Язык текста] строгий перевод target={target_lang}: {result!r}")
+            return result.strip()
     except Exception as e:
-        return text
+        print(f"[Язык текста] Финальная ошибка перевода: {e}")
+
+    # Не выдаём заведомо неправильный язык как будто всё успешно.
+    print(f"[Язык текста] Не удалось гарантировать язык {target_lang}. Оставлен исходный текст.")
+    return fallback
+
+
+def correct_text(text: str) -> str:
+    """
+    Исправляет текст и одновременно приводит его к выбранному языку интерфейса.
+    RU -> всегда русский.
+    UA -> всегда украинский.
+    """
+    return _process_text_for_language(text, correct_errors=True)
+
+
+def prepare_text_for_typing(text: str) -> str:
+    """
+    Финальная подготовка текста перед печатью.
+
+    Даже если исправитель выключен, выбранный язык всё равно соблюдается:
+    - русский режим -> русский текст;
+    - украинский режим -> украинский текст.
+
+    Исправление орфографии/грамматики зависит от переключателя исправителя.
+    """
+    return _process_text_for_language(
+        text,
+        correct_errors=_text_corrector_enabled
+    )
+
+
+def _get_clipboard_unicode():
+    """Читает текстовый буфер Windows. Возвращает None, если прочитать не удалось."""
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        CF_UNICODETEXT = 13
+        user32 = ctypes.windll.user32
+        kernel32 = ctypes.windll.kernel32
+
+        # ВАЖНО: на 64-битной Windows все HANDLE/HGLOBAL должны быть
+        # объявлены как указатели. Иначе ctypes по умолчанию использует c_int
+        # и может выбросить OverflowError: int too long to convert.
+        user32.OpenClipboard.argtypes = [wintypes.HWND]
+        user32.OpenClipboard.restype = wintypes.BOOL
+        user32.CloseClipboard.argtypes = []
+        user32.CloseClipboard.restype = wintypes.BOOL
+        user32.GetClipboardData.argtypes = [wintypes.UINT]
+        user32.GetClipboardData.restype = wintypes.HANDLE
+
+        kernel32.GlobalLock.argtypes = [wintypes.HGLOBAL]
+        kernel32.GlobalLock.restype = wintypes.LPVOID
+        kernel32.GlobalUnlock.argtypes = [wintypes.HGLOBAL]
+        kernel32.GlobalUnlock.restype = wintypes.BOOL
+
+        if not user32.OpenClipboard(None):
+            return None
+        try:
+            handle = user32.GetClipboardData(CF_UNICODETEXT)
+            if not handle:
+                return None
+            ptr = kernel32.GlobalLock(handle)
+            if not ptr:
+                return None
+            try:
+                return ctypes.wstring_at(ptr)
+            finally:
+                kernel32.GlobalUnlock(handle)
+        finally:
+            user32.CloseClipboard()
+    except Exception:
+        return None
+
+
+def _set_clipboard_unicode(value: str) -> bool:
+    """Надёжно помещает Unicode-текст в буфер Windows без сторонних библиотек."""
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        CF_UNICODETEXT = 13
+        GMEM_MOVEABLE = 0x0002
+
+        user32 = ctypes.windll.user32
+        kernel32 = ctypes.windll.kernel32
+
+        # Полные сигнатуры WinAPI обязательны для x64 Windows.
+        user32.OpenClipboard.argtypes = [wintypes.HWND]
+        user32.OpenClipboard.restype = wintypes.BOOL
+        user32.CloseClipboard.argtypes = []
+        user32.CloseClipboard.restype = wintypes.BOOL
+        user32.EmptyClipboard.argtypes = []
+        user32.EmptyClipboard.restype = wintypes.BOOL
+        user32.SetClipboardData.argtypes = [wintypes.UINT, wintypes.HANDLE]
+        user32.SetClipboardData.restype = wintypes.HANDLE
+
+        kernel32.GlobalAlloc.argtypes = [wintypes.UINT, ctypes.c_size_t]
+        kernel32.GlobalAlloc.restype = wintypes.HGLOBAL
+        kernel32.GlobalLock.argtypes = [wintypes.HGLOBAL]
+        kernel32.GlobalLock.restype = wintypes.LPVOID
+        kernel32.GlobalUnlock.argtypes = [wintypes.HGLOBAL]
+        kernel32.GlobalUnlock.restype = wintypes.BOOL
+        kernel32.GlobalFree.argtypes = [wintypes.HGLOBAL]
+        kernel32.GlobalFree.restype = wintypes.HGLOBAL
+
+        data = (str(value) + "\0").encode("utf-16-le")
+        handle = kernel32.GlobalAlloc(GMEM_MOVEABLE, len(data))
+        if not handle:
+            return False
+
+        ptr = kernel32.GlobalLock(handle)
+        if not ptr:
+            kernel32.GlobalFree(handle)
+            return False
+
+        ctypes.memmove(ptr, data, len(data))
+        kernel32.GlobalUnlock(handle)
+
+        opened = False
+        for _ in range(12):
+            if user32.OpenClipboard(None):
+                opened = True
+                break
+            time.sleep(0.02)
+
+        if not opened:
+            kernel32.GlobalFree(handle)
+            return False
+
+        try:
+            if not user32.EmptyClipboard():
+                kernel32.GlobalFree(handle)
+                return False
+
+            # После успешного SetClipboardData память принадлежит Windows.
+            if not user32.SetClipboardData(CF_UNICODETEXT, handle):
+                kernel32.GlobalFree(handle)
+                return False
+            handle = None
+            return True
+        finally:
+            user32.CloseClipboard()
+    except Exception as e:
+        print(f"[Буфер] Ошибка: {e}")
+        return False
+
+
+def type_unicode_text(text: str, restore_clipboard: bool = True) -> bool:
+    """
+    Печатает любой Unicode-текст в активное окно через буфер + Ctrl+V.
+    В отличие от keyboard.write(), корректно работает с русским/украинским.
+    """
+    value = str(text or "")
+    if not value:
+        return False
+
+    old_clipboard = _get_clipboard_unicode() if restore_clipboard else None
+
+    if not _set_clipboard_unicode(value):
+        # Fallback для ASCII, если Windows clipboard неожиданно недоступен.
+        try:
+            if value.isascii():
+                keyboard.write(value, delay=0.01)
+                return True
+        except Exception:
+            pass
+        return False
+
+    try:
+        time.sleep(0.05)
+        keyboard.press_and_release("ctrl+v")
+        time.sleep(0.12)
+        return True
+    finally:
+        if restore_clipboard and old_clipboard is not None:
+            _set_clipboard_unicode(old_clipboard)
 
 # ============================================================
 # ФУНКЦИИ ДЛЯ ВОСПРОИЗВЕДЕНИЯ ПЕСЕН (ИСПРАВЛЕННЫЕ)
@@ -451,6 +1290,10 @@ def volume_down(interface=None):
     return result
 
 def find_local_music(query: str) -> str:
+    _ensure_mita_apps_dir()
+    _build_mita_apps_index(force=True)
+    print(f"📁 Папка приложений Mita: {MITA_APPS_DIR}")
+
     music_dir = os.path.join(BASE_DIR, "music")
     if not os.path.exists(music_dir):
         try:
@@ -631,6 +1474,10 @@ def _play_audio_vlc(audio_url: str, title: str, interface=None):
         if _vlc_player.play() == -1:
             raise Exception("VLC не смог открыть аудиопоток")
 
+        if interface:
+            interface.set_now_playing(title)
+            interface.update_music_button(True)
+
         def monitor():
             global _music_stop, _vlc_player, _is_music_mode, _music_intensity
             started = False
@@ -648,6 +1495,11 @@ def _play_audio_vlc(audio_url: str, title: str, interface=None):
                 if state in (vlc.State.Playing, vlc.State.Paused):
                     started = True
                     _music_intensity = 0.7 + random.random() * 0.3
+                    if interface:
+                        try:
+                            interface.update_music_progress(player.get_time(), player.get_length())
+                        except Exception:
+                            pass
                 elif started and state in (vlc.State.Ended, vlc.State.Stopped, vlc.State.Error):
                     break
                 elif not started and time.time() > deadline:
@@ -881,6 +1733,663 @@ def stop_tts():
         pass
     return False
 
+
+# ============================================================
+# MITA ULTRA INTELLIGENCE CORE
+# ============================================================
+
+_MITA_MEMORY_FILE = os.path.join(BASE_DIR, "mita_ai_memory.json")
+_MITA_DIALOG_MEMORY = []
+_MITA_APP_INDEX = None
+_MITA_APP_INDEX_TIME = 0.0
+
+def _mita_load_memory():
+    global _MITA_DIALOG_MEMORY
+    try:
+        if os.path.exists(_MITA_MEMORY_FILE):
+            data = json.loads(Path(_MITA_MEMORY_FILE).read_text(encoding="utf-8"))
+            if isinstance(data, list):
+                _MITA_DIALOG_MEMORY = data[-30:]
+    except Exception:
+        _MITA_DIALOG_MEMORY = []
+
+def _mita_save_memory():
+    try:
+        Path(_MITA_MEMORY_FILE).write_text(
+            json.dumps(_MITA_DIALOG_MEMORY[-30:], ensure_ascii=False, indent=2),
+            encoding="utf-8"
+        )
+    except Exception:
+        pass
+
+def _mita_remember(role, content):
+    content = str(content or "").strip()
+    if not content:
+        return
+    _MITA_DIALOG_MEMORY.append({"role": role, "content": content[:5000]})
+    del _MITA_DIALOG_MEMORY[:-30]
+    _mita_save_memory()
+
+def _norm_app_name(value):
+    s = unicodedata.normalize("NFKC", str(value or "")).lower().strip()
+    s = re.sub(r"\.(exe|lnk|url)$", "", s)
+    s = s.replace("_", " ").replace("-", " ")
+    s = re.sub(r"[^0-9a-zа-яёіїєґ+.# ]+", " ", s, flags=re.I)
+    s = re.sub(r"\s+", " ", s).strip()
+    replacements = {
+        "дискорд":"discord", "дискордд":"discord", "discord":"discord",
+        "телега":"telegram", "телеграмм":"telegram", "телеграм":"telegram",
+        "telegram":"telegram", "стим":"steam", "steam":"steam",
+        "хром":"chrome", "гугл хром":"chrome", "google chrome":"chrome",
+        "браузер":"chrome", "роблокс":"roblox", "roblox":"roblox",
+        "спотифай":"spotify", "spotify":"spotify", "обс":"obs", "обс студио":"obs", "obs studio":"obs",
+        "бс":"bluestacks", "блюстакс":"bluestacks", "блустакс":"bluestacks",
+        "blue stacks":"bluestacks", "bluestacks":"bluestacks",
+        "кс":"cs2", "кс 2":"cs2", "counter strike 2":"cs2",
+        "дота":"dota 2", "dota2":"dota 2", "дота 2":"dota 2",
+        "калькулятор":"calculator", "блокнот":"notepad", "проводник":"explorer",
+        "диспетчер задач":"task manager", "параметры":"settings"
+    }
+    return replacements.get(s, s)
+
+def _build_smart_app_index(force=False):
+    global _MITA_APP_INDEX, _MITA_APP_INDEX_TIME
+    now = time.time()
+    if _MITA_APP_INDEX is not None and not force and now - _MITA_APP_INDEX_TIME < 600:
+        return _MITA_APP_INDEX
+
+    items = []
+    seen = set()
+
+    def add(name, path, kind="file"):
+        if not name or not path:
+            return
+        key = (str(path).lower(), _norm_app_name(name))
+        if key in seen:
+            return
+        seen.add(key)
+        items.append({"name": str(name), "norm": _norm_app_name(name), "path": str(path), "kind": kind})
+
+    # Системные приложения Windows.
+    system_apps = {
+        "calculator": "calc.exe", "калькулятор": "calc.exe",
+        "notepad": "notepad.exe", "блокнот": "notepad.exe",
+        "explorer": "explorer.exe", "проводник": "explorer.exe",
+        "task manager": "taskmgr.exe", "диспетчер задач": "taskmgr.exe",
+        "paint": "mspaint.exe", "ножницы": "snippingtool.exe",
+        "cmd": "cmd.exe", "командная строка": "cmd.exe",
+        "powershell": "powershell.exe"
+    }
+    for n, command in system_apps.items():
+        add(n, command, "command")
+
+    # Уже известные приложения из базы Миты.
+    for alias, app_key in APP_TRANSLIT_MAP.items():
+        exe = APP_EXE_MAP.get(app_key)
+        if exe:
+            add(alias, exe, "command")
+            add(app_key, exe, "command")
+    for app_key, exe in APP_EXE_MAP.items():
+        add(app_key, exe, "command")
+
+    # Ярлыки Start Menu — это самый надёжный способ узнать реальное имя программы.
+    start_dirs = [
+        os.path.join(os.environ.get("APPDATA", ""), "Microsoft", "Windows", "Start Menu", "Programs"),
+        os.path.join(os.environ.get("PROGRAMDATA", ""), "Microsoft", "Windows", "Start Menu", "Programs"),
+        os.path.join(os.environ.get("USERPROFILE", ""), "Desktop"),
+        os.path.join(os.environ.get("PUBLIC", r"C:\Users\Public"), "Desktop"),
+    ]
+    for base in start_dirs:
+        if not base or not os.path.isdir(base):
+            continue
+        try:
+            for root, dirs, files in os.walk(base):
+                dirs[:] = [d for d in dirs if not d.startswith(".")]
+                for fn in files:
+                    if fn.lower().endswith((".lnk", ".url", ".exe")):
+                        add(os.path.splitext(fn)[0], os.path.join(root, fn), "file")
+        except Exception:
+            pass
+
+    # App Paths из реестра.
+    registry_roots = [
+        (winreg.HKEY_CURRENT_USER, r"SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths"),
+        (winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths"),
+    ]
+    for hive, root_path in registry_roots:
+        try:
+            with winreg.OpenKey(hive, root_path) as root:
+                count, _, _ = winreg.QueryInfoKey(root)
+                for i in range(count):
+                    try:
+                        sub = winreg.EnumKey(root, i)
+                        with winreg.OpenKey(root, sub) as k:
+                            path, _ = winreg.QueryValueEx(k, None)
+                            if path:
+                                add(os.path.splitext(sub)[0], str(path).strip('"'), "file")
+                    except Exception:
+                        pass
+        except Exception:
+            pass
+
+    _MITA_APP_INDEX = items
+    _MITA_APP_INDEX_TIME = now
+    return items
+
+def _smart_app_match(query):
+    q = _norm_app_name(query)
+    if not q:
+        return None, 0.0
+    items = _build_smart_app_index()
+    best = None
+    best_score = 0.0
+    q_tokens = set(q.split())
+    for item in items:
+        n = item["norm"]
+        if not n:
+            continue
+        if q == n:
+            score = 1.0
+        elif q in n or n in q:
+            score = 0.92 if min(len(q), len(n)) >= 3 else 0.75
+        else:
+            seq = difflib.SequenceMatcher(None, q, n).ratio()
+            nt = set(n.split())
+            token = len(q_tokens & nt) / max(1, len(q_tokens | nt))
+            score = max(seq, token * 0.92)
+        if score > best_score:
+            best, best_score = item, score
+    return best, best_score
+
+def _launch_index_item(item):
+    """Запускает только реально найденный элемент индекса."""
+    if not item:
+        return False
+    try:
+        path = str(item.get("path") or "").strip()
+        kind = item.get("kind")
+        if not path:
+            return False
+
+        if kind == "command":
+            # Для встроенных Windows-команд допускаем запуск по имени.
+            subprocess.Popen(path, shell=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        else:
+            # Ярлык / exe / url существует на диске.
+            if not os.path.exists(path):
+                return False
+            os.startfile(path)
+        return True
+    except Exception as e:
+        print(f"[Mita App] Ошибка запуска найденного приложения: {e}")
+        return False
+
+
+def _ai_resolve_app_identity(target_raw):
+    """
+    ИИ превращает разговорное/ошибочно распознанное название программы
+    в нормальное имя и вероятные имена exe.
+    НИЧЕГО не запускает — только возвращает подсказки для локального поиска.
+    """
+    target = str(target_raw or "").strip()
+    if not target or client is None:
+        return None
+
+    prompt = f"""
+Ты — модуль распознавания названий Windows-приложений.
+Пользователь голосом произнёс название приложения: {target!r}
+
+Нужно понять, какую ПРОГРАММУ он имеет в виду, даже если:
+- название сказано по-русски/украински/английски;
+- это транслит или фонетическая запись;
+- есть ошибка распознавания речи;
+- используется сокращение или сленг.
+
+Примеры:
+"обс", "о б с", "obs" -> OBS Studio, exe обычно obs64.exe.
+"бс", "блюстакс", "blue stacks" -> BlueStacks, exe может быть HD-Player.exe / BlueStacks.exe.
+"дс", "дискордик" -> Discord, exe Discord.exe.
+"тг", "телега" -> Telegram, exe Telegram.exe.
+"спотик" -> Spotify, exe Spotify.exe.
+"хром", "chrome" -> Google Chrome, exe chrome.exe.
+"яндекс", "яндекс браузер" -> Yandex Browser, exe browser.exe.
+"опера", "opera" -> Opera Browser, exe opera.exe / launcher.exe.
+"фаерфокс", "firefox" -> Mozilla Firefox, exe firefox.exe.
+"эдж", "edge" -> Microsoft Edge, exe msedge.exe.
+"кс", "кс два" -> Counter-Strike 2, exe cs2.exe.
+"гта пять" -> Grand Theft Auto V, возможны GTA5.exe / PlayGTAV.exe.
+"майнкрафт" -> Minecraft / Minecraft Launcher, найди наиболее вероятный Windows launcher.
+
+Верни ТОЛЬКО JSON без markdown:
+{{
+  "app_name": "официальное или наиболее вероятное название",
+  "search_names": ["вариант 1", "вариант 2", "вариант 3"],
+  "exe_candidates": ["program.exe", "another.exe"],
+  "confidence": 0.0
+}}
+
+Правила:
+- Не придумывай shell-команды, аргументы запуска, URL или пути.
+- exe_candidates должны содержать только имена файлов *.exe.
+- Браузер, игра, лаунчер, мессенджер, редактор или любая другая установленная программа — это приложение.
+- Если пользователь назвал браузер (Chrome, Opera, Yandex, Firefox, Edge и т.п.), верни именно приложение браузера.
+- Если сокращение неоднозначно, выбери наиболее вероятную известную программу, но снизь confidence.
+- Максимум 6 search_names и 6 exe_candidates.
+"""
+    try:
+        completion = client.chat.completions.create(
+            model="openai/gpt-oss-120b",
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.0,
+            max_completion_tokens=300,
+            top_p=1,
+            reasoning_effort="medium",
+            stream=False
+        )
+        obj = _extract_json_object(completion.choices[0].message.content)
+        if not isinstance(obj, dict):
+            return None
+
+        app_name = str(obj.get("app_name") or "").strip()
+        search_names = obj.get("search_names") or []
+        exe_candidates = obj.get("exe_candidates") or []
+
+        if not isinstance(search_names, list):
+            search_names = []
+        if not isinstance(exe_candidates, list):
+            exe_candidates = []
+
+        safe_names = []
+        for x in search_names[:6]:
+            x = str(x or "").strip()
+            if x and len(x) <= 100:
+                safe_names.append(x)
+
+        safe_exes = []
+        for x in exe_candidates[:6]:
+            x = os.path.basename(str(x or "").strip())
+            if re.fullmatch(r"(?i)[a-z0-9_. +()-]{1,100}\.exe", x):
+                safe_exes.append(x)
+
+        try:
+            confidence = max(0.0, min(1.0, float(obj.get("confidence", 0.0))))
+        except Exception:
+            confidence = 0.0
+
+        return {
+            "app_name": app_name,
+            "search_names": safe_names,
+            "exe_candidates": safe_exes,
+            "confidence": confidence,
+        }
+    except Exception as e:
+        print(f"[Mita App AI] Ошибка определения приложения: {e}")
+        return None
+
+
+def _find_and_launch_exe_candidate(exe_name, cache_key=None):
+    """Ищет конкретный exe и запускает только если путь действительно найден."""
+    exe_name = os.path.basename(str(exe_name or "").strip())
+    if not re.fullmatch(r"(?i)[a-z0-9_. +()-]{1,100}\.exe", exe_name):
+        return False, None
+
+    try:
+        found_path = find_exe_fast_registry(exe_name)
+    except Exception:
+        found_path = None
+
+    if not found_path:
+        try:
+            found_path = search_exe_on_disks(exe_name)
+        except Exception as e:
+            print(f"[Mita App] Ошибка поиска {exe_name}: {e}")
+            found_path = None
+
+    if not found_path or not os.path.isfile(found_path):
+        return False, None
+
+    try:
+        os.startfile(found_path)
+        if cache_key:
+            try:
+                cache = load_app_cache()
+                cache[str(cache_key)] = found_path
+                save_app_cache(cache)
+            except Exception:
+                pass
+        return True, found_path
+    except Exception as e:
+        print(f"[Mita App] Не удалось запустить {found_path}: {e}")
+        return False, None
+
+
+def _legacy_smart_launch_application_ai(target_raw):
+    """
+    AI-FIRST запуск приложения.
+
+    Любое название сначала отправляется в ИИ. ИИ определяет, что пользователь
+    имел в виду, и возвращает только безопасные поисковые подсказки: название
+    программы и возможные *.exe. Уже после этого Mita ищет РЕАЛЬНЫЙ ярлык/EXE
+    на компьютере и только тогда запускает его.
+
+    Если ИИ недоступен, остаётся локальный fallback по ярлыкам/реестру/алиасам.
+    """
+    target = str(target_raw or "").strip()
+    if not target:
+        return False, None
+
+    print(f"[Mita App AI-FIRST] Запрос: {target!r}")
+
+    # 1) ВСЕГДА сначала спрашиваем ИИ, что это за приложение.
+    ai = _ai_resolve_app_identity(target)
+    if ai:
+        print(
+            f"[Mita App AI] {target!r} -> {ai.get('app_name')!r}, "
+            f"names={ai.get('search_names')}, exe={ai.get('exe_candidates')}, "
+            f"confidence={ai.get('confidence')}"
+        )
+
+        search_names = []
+        for name in [ai.get("app_name"), *(ai.get("search_names") or []), target]:
+            name = str(name or "").strip()
+            if name and name not in search_names:
+                search_names.append(name)
+
+        # Обновляем индекс, чтобы видеть недавно установленные программы.
+        _build_smart_app_index(force=True)
+
+        # Сначала реальные ярлыки / App Paths / Desktop / Start Menu.
+        best_item = None
+        best_score = 0.0
+        for name in search_names:
+            candidate, candidate_score = _smart_app_match(name)
+            if candidate and candidate_score > best_score:
+                best_item, best_score = candidate, candidate_score
+
+        # Для уверенного AI-ответа допускаем чуть более мягкое совпадение.
+        min_score = 0.56 if float(ai.get("confidence") or 0.0) >= 0.72 else 0.64
+        if best_item and best_score >= min_score:
+            if _launch_index_item(best_item):
+                print(f"[Mita App] Запущено по AI имени: {best_item['name']} ({best_score:.2f})")
+                return True, ai.get("app_name") or best_item["name"]
+
+        # Затем проверяем EXE-кандидаты от ИИ. Никаких shell-команд от модели:
+        # имя валидируется, а файл обязательно реально ищется на этом ПК.
+        for exe in ai.get("exe_candidates") or []:
+            ok, found = _find_and_launch_exe_candidate(
+                exe,
+                cache_key=_norm_app_name(ai.get("app_name") or target)
+            )
+            if ok:
+                print(f"[Mita App] Запущен найденный EXE: {found}")
+                return True, ai.get("app_name") or os.path.basename(found)
+
+    # 2) Fallback, если ИИ временно недоступен/не угадал.
+    # Локальный индекс всё равно умеет находить реальные установленные программы.
+    item, score = _smart_app_match(target)
+    if item and score >= 0.66 and _launch_index_item(item):
+        print(f"[Mita App] Fallback: {item['name']} ({score:.2f})")
+        return True, item["name"]
+
+    # 3) Старые известные алиасы — только с проверкой существования EXE.
+    target_clean = target.lower().strip()
+    app_key = APP_TRANSLIT_MAP.get(target_clean, target_clean)
+    exe_name = APP_EXE_MAP.get(app_key)
+    if exe_name:
+        try:
+            cache = load_app_cache()
+            cached_path = cache.get(app_key)
+            if cached_path and os.path.isfile(cached_path):
+                os.startfile(cached_path)
+                return True, app_key
+        except Exception:
+            pass
+
+        ok, found = _find_and_launch_exe_candidate(exe_name, cache_key=app_key)
+        if ok:
+            return True, app_key
+
+    play_sound("error")
+    print(f"[Mita App] Не найдено на ПК: {target!r}")
+    return False, None
+
+def _extract_json_object(text):
+    s = str(text or "").strip()
+    s = re.sub(r"^```(?:json)?\s*", "", s, flags=re.I)
+    s = re.sub(r"\s*```$", "", s)
+    start, end = s.find("{"), s.rfind("}")
+    if start < 0 or end <= start:
+        return None
+    try:
+        return json.loads(s[start:end+1])
+    except Exception:
+        return None
+
+# ============================================================
+# ПОДТВЕРЖДЕНИЕ ЗАПУСКА ПРИЛОЖЕНИЙ / ИГР
+# ============================================================
+_PENDING_APP_LAUNCH = None
+_PENDING_APP_LAUNCH_TIMEOUT = 30.0
+
+
+def _set_pending_app_launch(spoken_target, resolved_name=None):
+    """Запоминает приложение, которое Мита предложила запустить."""
+    global _PENDING_APP_LAUNCH
+    resolved = str(resolved_name or spoken_target or "").strip()
+    spoken = str(spoken_target or resolved).strip()
+    _PENDING_APP_LAUNCH = {
+        "spoken_target": spoken,
+        "resolved_name": resolved,
+        "created_at": time.time(),
+    }
+    return resolved
+
+
+def _clear_pending_app_launch():
+    global _PENDING_APP_LAUNCH
+    _PENDING_APP_LAUNCH = None
+
+
+def _get_pending_app_launch():
+    global _PENDING_APP_LAUNCH
+    if not _PENDING_APP_LAUNCH:
+        return None
+    if time.time() - float(_PENDING_APP_LAUNCH.get("created_at", 0)) > _PENDING_APP_LAUNCH_TIMEOUT:
+        _PENDING_APP_LAUNCH = None
+        return None
+    return _PENDING_APP_LAUNCH
+
+
+def _handle_pending_app_confirmation(phrase, interface):
+    """
+    Обрабатывает короткий ответ пользователя после вопроса
+    «Хотите запустить ...?».
+    Возвращает True, если фраза была ответом на подтверждение.
+    """
+    pending = _get_pending_app_launch()
+    if not pending:
+        return False
+
+    text = str(phrase or "").lower().strip()
+    words = set(re.findall(r"[а-яёіїєґa-z0-9]+", text, flags=re.I))
+
+    yes_words = {
+        "да", "ага", "угу", "конечно", "запускай", "запусти", "включай", "включи",
+        "так", "авжеж", "звісно", "запускай", "запусти", "вмикай", "увімкни", "ок", "okay"
+    }
+    no_words = {
+        "нет", "не", "отмена", "отмени", "ненадо", "стоп", "неа",
+        "ні", "скасуй", "скасувати", "досить"
+    }
+
+    positive = bool(words & yes_words) or text in {"давай", "можно", "добро", "точно"}
+    negative = bool(words & no_words) or "не надо" in text or "не запускай" in text or "не потрібно" in text
+
+    if negative:
+        name = pending.get("resolved_name") or pending.get("spoken_target") or "приложение"
+        _clear_pending_app_launch()
+        msg = f"Хорошо, не запускаю {name}." if UI_LANGUAGE == "ru" else f"Добре, не запускаю {name}."
+        interface.add_chat_message("Мита", msg, is_mita=True)
+        speak(msg, force=True)
+        return True
+
+    if positive:
+        name = pending.get("resolved_name") or pending.get("spoken_target") or ""
+        _clear_pending_app_launch()
+        msg = f"Запускаю {name}." if UI_LANGUAGE == "ru" else f"Запускаю {name}."
+        interface.add_chat_message("Мита", msg, is_mita=True)
+        speak(msg, force=True)
+
+        # Сам поиск может быть долгим, поэтому запускаем его отдельно от UI-потока.
+        def _do_launch():
+            ok, matched = smart_launch_application(name)
+            if not ok:
+                fail = T("app_not_found").format(name)
+                try:
+                    interface.root.after(0, lambda: interface.add_chat_message("Мита", fail, is_mita=True))
+                except Exception:
+                    pass
+                speak(fail, force=True)
+
+        threading.Thread(target=_do_launch, daemon=True).start()
+        return True
+
+    # Если пользователь вместо «да/нет» сказал новую полноценную команду,
+    # старое подтверждение не должно мешать.
+    command_hints = {
+        "запусти", "открой", "включи", "закрой", "выключи", "напиши", "погода",
+        "запусти", "відкрий", "увімкни", "закрий", "вимкни", "напиши", "погода"
+    }
+    if words & command_hints:
+        _clear_pending_app_launch()
+        return False
+
+    # Пока ждём подтверждения, мягко напоминаем, что нужен ответ да/нет.
+    name = pending.get("resolved_name") or pending.get("spoken_target") or "приложение"
+    msg = (f"Запустить {name}? Скажите да или нет."
+           if UI_LANGUAGE == "ru" else f"Запустити {name}? Скажіть так або ні.")
+    interface.add_chat_message("Мита", msg, is_mita=True)
+    speak(msg, force=True)
+    return True
+
+
+def mita_plan_intent(user_text):
+    """ИИ понимает свободную фразу и превращает её только в разрешённое действие."""
+    if client is None:
+        return None
+    lang = "uk" if UI_LANGUAGE == "ua" else "ru"
+    prompt = f"""
+Ты — модуль понимания команд Windows-ассистента Mita.
+Пойми намерение пользователя, даже если есть ошибки распознавания, сленг, падежи,
+русский/украинский/английский, транслит или неточная формулировка.
+
+Верни ТОЛЬКО один JSON-объект без markdown.
+Разрешённые intent:
+launch_app, close_app, open_web, minimize_all, minimize_app, move_window,
+write_text, weather, stop_speech, chat.
+
+Схема:
+{{"intent":"...", "target":"", "text":"", "monitor":0, "confidence":0.0}}
+
+Правила:
+- "зайди/открой/вруби/запусти дискордик" => launch_app.
+- Любая просьба запустить/включить/открыть НАЗВАНИЕ ПРОГРАММЫ, БРАУЗЕРА, ИГРЫ или ЛАУНЧЕРА => launch_app.
+- "запусти хром/яндекс/оперу/firefox/edge" => launch_app, а НЕ open_web.
+- "запусти кс/доту/гта/майнкрафт/роблокс" => launch_app.
+- Только если явно про сайт, веб-страницу, URL или поиск в интернете => open_web.
+- "убери/закрой/выруби программу" => close_app.
+- "напиши/введи/напечатай ..." => write_text, поле text содержит только текст для печати.
+- Если не просит управлять ПК, intent=chat.
+- Не придумывай опасные shell-команды и не возвращай код.
+- Язык интерфейса: {lang}.
+Фраза пользователя: {user_text!r}
+"""
+    try:
+        completion = client.chat.completions.create(
+            model="openai/gpt-oss-120b",
+            messages=[{"role":"user","content":prompt}],
+            temperature=0.0,
+            max_completion_tokens=300,
+            top_p=1,
+            reasoning_effort="medium",
+            stream=False
+        )
+        obj = _extract_json_object(completion.choices[0].message.content)
+        if not isinstance(obj, dict):
+            return None
+        if obj.get("intent") not in {
+            "launch_app","close_app","open_web","minimize_all","minimize_app",
+            "move_window","write_text","weather","stop_speech","chat"
+        }:
+            return None
+        try:
+            obj["confidence"] = float(obj.get("confidence", 0.0))
+        except Exception:
+            obj["confidence"] = 0.0
+        return obj
+    except Exception as e:
+        print(f"[Mita Brain] Ошибка планировщика: {e}")
+        return None
+
+def process_smart_ai_command(phrase, interface):
+    plan = mita_plan_intent(phrase)
+    if not plan or plan.get("confidence", 0.0) < 0.55:
+        return False
+    intent = plan.get("intent")
+    target = str(plan.get("target") or "").strip()
+
+    if intent == "chat":
+        return False
+    if intent == "launch_app":
+        # Запуск приложений — только локальная папка MitaApps, без AI-resolver/Steam.
+        ok, matched = smart_launch_application(target)
+        msg = T("app_launching").format(matched or target) if ok else T("app_not_found").format(target)
+        interface.add_chat_message("Мита", msg, is_mita=True)
+        speak(msg, force=True)
+        return True
+    if intent == "close_app":
+        ok = kill_application(target)
+        msg = T("app_closing").format(target) if ok else T("app_close_failed").format(target)
+        interface.add_chat_message("Мита", msg, is_mita=True); speak(msg, force=True)
+        return True
+    if intent == "open_web":
+        open_website(target)
+        msg = T("web_opening").format(target)
+        interface.add_chat_message("Мита", msg, is_mita=True); speak(msg, force=True)
+        return True
+    if intent == "minimize_all":
+        minimize_all_windows(); speak(T("minimized_all"), force=True); return True
+    if intent == "minimize_app":
+        ok = minimize_window(target)
+        msg = ("Свернула " if UI_LANGUAGE == "ru" else "Згорнула ") + target if ok else T("app_not_found").format(target)
+        interface.add_chat_message("Мита", msg, is_mita=True); speak(msg, force=True); return True
+    if intent == "move_window":
+        try: monitor = int(plan.get("monitor") or 0)
+        except Exception: monitor = 0
+        if monitor not in (1,2):
+            speak(T("move_to_monitor_ask"), force=True); return True
+        ok = move_window_to_monitor(target, monitor)
+        speak(T("moving_window").format(monitor) if ok else T("move_failed"), force=True)
+        return True
+    if intent == "write_text":
+        value = str(plan.get("text") or "")
+        if value:
+            value = prepare_text_for_typing(value)
+            type_unicode_text(value)
+            interface.add_chat_message("Мита", T("typing"), is_mita=True)
+        return True
+    if intent == "weather":
+        result = get_local_weather(force=False, lang=("ua" if UI_LANGUAGE == "ua" else "ru"))
+        msg = result.get("report") if result.get("ok") else result.get("error", "Ошибка погоды")
+        interface.add_chat_message("Мита", msg, is_mita=True); speak(msg, force=True)
+        return True
+    if intent == "stop_speech":
+        stop_tts()
+        return True
+    return False
+
+_mita_load_memory()
+
 # ============================================================
 # GROQ API
 # ============================================================
@@ -890,27 +2399,34 @@ client = Groq(api_key=GROQ_API_KEY) if GROQ_API_KEY else None
 
 def ask_groq(question):
     if client is None:
-        return "⚠️ Groq API ключ не настроен. Добавьте переменную окружения GROQ_API_KEY."
+        return "⚠️ Groq API ключ не настроен."
     try:
         ui_lang = UI_LANGUAGE
         lang_text = "українською" if ui_lang == "ua" else "русском"
-        system_prompt = f"""Ты — голосовой ассистент Мита. Отвечай кратко и по делу.
-Ты ОБЯЗАН отвечать ТОЛЬКО на {lang_text} языке!
-Даже если вопрос на другом языке - ВСЕГДА отвечай на {lang_text}!
-Отвечай обычным текстом, без форматирования."""
+        system_prompt = f"""Ты — Mita, очень умный персональный голосовой ассистент для Windows.
+Отвечай ТОЛЬКО на {lang_text} языке, естественно и по-человечески.
+Ты должна понимать сленг, опечатки, неполные фразы, контекст и продолжения разговора.
+Не притворяйся, что выполнила действие на ПК: системные действия выполняет отдельный модуль.
+Если это обычный вопрос — дай полезный, точный ответ. Если вопрос простой — отвечай кратко.
+Не добавляй markdown без необходимости. Не выдумывай факты."""
+        messages = [{"role":"system","content":system_prompt}]
+        for msg in _MITA_DIALOG_MEMORY[-12:]:
+            if isinstance(msg, dict) and msg.get("role") in ("user","assistant"):
+                messages.append({"role":msg["role"],"content":str(msg.get("content",""))})
+        messages.append({"role":"user","content":str(question)})
         completion = client.chat.completions.create(
             model="openai/gpt-oss-120b",
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": question}
-            ],
-            temperature=1,
+            messages=messages,
+            temperature=0.55,
             max_completion_tokens=2048,
             top_p=1,
-            reasoning_effort="medium",
+            reasoning_effort="high",
             stream=False
         )
-        return completion.choices[0].message.content
+        answer = str(completion.choices[0].message.content or "").strip()
+        _mita_remember("user", question)
+        _mita_remember("assistant", answer)
+        return answer
     except Exception as e:
         return T("error_text").format(e)
 
@@ -1060,12 +2576,12 @@ class CyberButton(tk.Canvas):
         self._hover = False
         self._custom_bg = None
         self._custom_fg = None
-        self._base_bg = "#081923"
-        self._panel = "#06151e"
-        self._line = "#0d4e66"
-        self._cyan = "#19cfff"
-        self._cyan2 = "#7be9ff"
-        self._green = "#00f59a"
+        self._base_bg = "#151123"
+        self._panel = "#100d19"
+        self._line = "#34264c"
+        self._cyan = "#8f5cff"
+        self._cyan2 = "#c3a5ff"
+        self._green = "#52e6a5"
         self._amber = "#ffb52e"
         reqw = 150 if width is None else max(90, int(width)*9)
         super().__init__(master, width=reqw, height=height, bg=master.cget("bg"),
@@ -1145,7 +2661,7 @@ class ModeSelectionWindow:
         self.root.title("MITA // SECURE MODE SELECTOR")
         self.root.geometry("620x560")
         self.root.resizable(False, False)
-        self.root.configure(bg="#020a10")
+        self.root.configure(bg="#0b0912")
 
         if parent is not None:
             self.root.transient(parent)
@@ -1273,7 +2789,7 @@ class KeyLoginWindow:
         self.root.title("MITA // SECURE ACCESS")
         self.root.geometry("620x430")
         self.root.resizable(False, False)
-        self.root.configure(bg="#020a10")
+        self.root.configure(bg="#0b0912")
 
         if parent is not None:
             self.root.transient(parent)
@@ -1419,14 +2935,14 @@ class MisideInterface:
     Logic and voice/music back-end remain compatible with the original script.
     """
 
-    W, H = 1480, 900
+    W, H = 1280, 820
 
     def __init__(self):
         self.root = tk.Tk()
-        self.root.title("MITA // SECURE INTELLIGENCE CONSOLE")
+        self.root.title("Mita — Голосовой ассистент")
         self.root.geometry(f"{self.W}x{self.H}")
-        self.root.minsize(1180, 740)
-        self.root.configure(bg="#020a10")
+        self.root.minsize(1100, 700)
+        self.root.configure(bg="#0b0912")
         self.root.resizable(True, True)
 
         self.running = True
@@ -1438,6 +2954,18 @@ class MisideInterface:
         self.chat_history = []
         self.message_tags = []
         self.current_tab = 0
+
+        # NEO UI live state
+        self.live_voice_text = ""
+        self.live_voice_partial = False
+        self.live_voice_updated = 0.0
+        self.now_playing_title = ""
+        self.music_progress = 0.0
+        self.music_elapsed = 0
+        self.music_duration = 0
+        self._neo_wave_phase = 0.0
+        self._neo_player_phase = 0.0
+        self._neo_status_flash = 0.0
 
         self.heart_beat_strength = 0.0
         self.heart_beat_target = 0.0
@@ -1458,30 +2986,70 @@ class MisideInterface:
         self.is_dragging = False
         self._toast_after = None
 
+        # Расширенная оболочка интерфейса MITA
+        self.focus_mode = False
+        self.fullscreen_mode = False
+        self.always_on_top = False
+        self.compact_mode = False
+        self.command_palette = None
+        self.palette_query = tk.StringVar(value="")
+        self.clipboard_history = []
+        self._last_clipboard_value = ""
+        self.toast_stack = []
+        self.recent_ui_actions = []
+        self.telemetry_history = {"cpu": [], "ram": [], "disk": []}
+        self._net_last_bytes = None
+        self._net_last_time = time.time()
+        self._net_speed_mbps = 0.0
+        self._effects_enabled = True
+        self._reduce_motion = False
+        self._glow_phase = 0.0
+        self._logo_phase = 0.0
+        self._mouse_x = self.W // 2
+        self._mouse_y = self.H // 2
+        self._accent_index = 0
+        self._accent_presets = [
+            ("VIOLET", "#7c4dff", "#a978ff", "#c7a8ff"),
+            ("NEON BLUE", "#3d7bff", "#6ca8ff", "#a8cbff"),
+            ("MAGENTA", "#d343ff", "#ef7dff", "#f8b6ff"),
+            ("EMERALD", "#27c98b", "#65e3b6", "#a2f1d3"),
+            ("SUNSET", "#ff5f7a", "#ff8a9e", "#ffc0cb"),
+        ]
+        self.focus_timer_end = None
+        self.focus_timer_running = False
+        self.notes_window = None
+        self.telemetry_window = None
+        self.clipboard_window = None
+        self.palette_commands = []
+
+        # FX 3.0 / weather HUD state
+        self._weather_loading = False
+        self._weather_last_ui_update = 0.0
+        self._weather_icon_phase = 0.0
+        self._fx_frame = 0
+        self._cursor_trail = []
+        self._ripple_items = []
+        self._shooting_stars = []
+        self._aurora_phase = 0.0
+        self._ambient_energy = 0.0
+        self._transition_lock = False
+        self._last_tab_change = 0.0
+
         self.colors = {
-            "bg": "#020a10",
-            "bg2": "#04121b",
-            "panel": "#06151e",
-            "panel2": "#081c27",
-            "panel3": "#0a2532",
-            "line": "#0b4054",
-            "line2": "#12627d",
-            "primary": "#00bfff",
-            "primary2": "#4bdcff",
-            "purple": "#00e5ff",
-            "cyan": "#00bfff",
-            "green": "#00ff9c",
-            "danger": "#ffb020",
-            "text": "#c9e9f5",
-            "muted": "#6e9aad",
-            "dim": "#315c6d",
-            "chat_bg": "#020c12",
-            "user": "#082532",
-            "mita": "#061a23",
+            "bg": "#0b0912", "bg2": "#0b0912", "topbar": "#0d0a15",
+            "sidebar": "#0c0a13", "panel": "#141022", "panel2": "#100d1a",
+            "panel3": "#19132a", "chip": "#1b1430", "active": "#24183d",
+            "border": "#292039", "line": "#292039", "line2": "#4b3472",
+            "primary": "#7c4dff", "primary2": "#a978ff", "purple": "#7c4dff",
+            "purple2": "#a978ff", "purple3": "#c7a8ff", "cyan": "#a978ff",
+            "green": "#52e6a5", "danger": "#ffb65c", "text": "#f0edf7",
+            "muted": "#8f879d", "dim": "#5e566b", "chat_bg": "#0f0c17",
+            "user": "#19132a", "mita": "#171121"
         }
 
         self.root.protocol("WM_DELETE_WINDOW", self.quit)
         self.setup_ui()
+        self.setup_unique_features()
         self.root.after(50, self.fade_in)
 
         self.audio_monitor = SystemAudioMonitor(self)
@@ -1514,21 +3082,15 @@ class MisideInterface:
                            danger=danger, width=width, height=38)
 
     def _card(self, parent, title=None, subtitle=None):
-        outer = tk.Frame(parent, bg=self.colors["line"], bd=0)
+        outer = tk.Frame(parent, bg=self.colors["border"], bd=0)
         frame = tk.Frame(outer, bg=self.colors["panel"], bd=0)
         frame.pack(fill="both", expand=True, padx=1, pady=1)
-        # cyan micro-rail on top makes every panel feel like a live module
-        rail = tk.Frame(frame, bg=self.colors["line2"], height=2)
-        rail.pack(fill="x")
         if title:
             head = tk.Frame(frame, bg=self.colors["panel"], height=38)
-            head.pack(fill="x", padx=14, pady=(8, 0))
-            head.pack_propagate(False)
-            tk.Label(head, text=f"// {title}", font=("Consolas", 9, "bold"),
-                     bg=self.colors["panel"], fg=self.colors["text"]).pack(side="left", pady=8)
+            head.pack(fill="x", padx=14, pady=(8, 0)); head.pack_propagate(False)
+            tk.Label(head, text=title, font=("Segoe UI", 9, "bold"), bg=self.colors["panel"], fg=self.colors["text"]).pack(side="left", pady=7)
             if subtitle:
-                tk.Label(head, text=subtitle, font=("Consolas", 7, "bold"),
-                         bg=self.colors["panel"], fg=self.colors["green"]).pack(side="right", pady=8)
+                tk.Label(head, text=subtitle, font=("Segoe UI", 7, "bold"), bg=self.colors["panel"], fg=self.colors["purple2"]).pack(side="right", pady=8)
         return outer
 
     def _bind_hover(self, widget, normal, hover):
@@ -1536,318 +3098,374 @@ class MisideInterface:
         widget.bind("<Leave>", lambda e: widget.config(bg=normal))
 
     def _make_nav(self, parent, key, icon, idx):
-        row = tk.Frame(parent, bg=self.colors["panel"], height=46, cursor="hand2")
-        row.pack(fill="x", padx=10, pady=2)
-        row.pack_propagate(False)
-        marker = tk.Frame(row, bg=self.colors["panel"], width=3)
-        marker.pack(side="left", fill="y")
-        icon_lbl = tk.Label(row, text=icon, font=("Consolas", 13, "bold"),
-                            bg=self.colors["panel"], fg=self.colors["muted"], width=3)
-        icon_lbl.pack(side="left", padx=(7, 2))
-        text_lbl = tk.Label(row, text=key.upper(), font=("Consolas", 8, "bold"),
-                            bg=self.colors["panel"], fg=self.colors["muted"], anchor="w")
+        row = tk.Frame(parent, bg=self.colors["sidebar"], height=44, cursor="hand2")
+        row.pack(fill="x", padx=10, pady=2); row.pack_propagate(False)
+        marker = tk.Frame(row, bg=self.colors["sidebar"], width=3); marker.pack(side="left", fill="y")
+        icon_lbl = tk.Label(row, text=icon, font=("Segoe UI Symbol", 12), bg=self.colors["sidebar"], fg=self.colors["muted"], width=3)
+        icon_lbl.pack(side="left", padx=(5, 2))
+        text_lbl = tk.Label(row, text=key, font=("Segoe UI", 9, "bold"), bg=self.colors["sidebar"], fg=self.colors["muted"], anchor="w")
         text_lbl.pack(side="left", fill="x", expand=True)
-        code = tk.Label(row, text=f"0{idx+1}", font=("Consolas", 7, "bold"),
-                        bg=self.colors["panel"], fg=self.colors["dim"])
-        code.pack(side="right", padx=10)
-        for w in (row, icon_lbl, text_lbl, marker, code):
+        for w in (row, icon_lbl, text_lbl, marker):
             w.bind("<Button-1>", lambda e, i=idx: self.switch_tab(i))
-            w.bind("<Enter>", lambda e, r=row: r.config(bg=self.colors["panel2"]))
-        self.nav_items.append((row, icon_lbl, text_lbl))
+        self.nav_items.append((row, icon_lbl, text_lbl, marker))
         return row
 
     def setup_ui(self):
         self.canvas = tk.Canvas(self.root, bg=self.colors["bg"], highlightthickness=0, bd=0)
         self.canvas.pack(fill="both", expand=True)
-        self.create_background()
 
-        # ultra-thin intelligence ticker
-        self.intel_wire = tk.Frame(self.root, bg="#03131d",
-                                   highlightbackground=self.colors["line"], highlightthickness=1)
-        self.intel_wire.place(x=14, y=8, relwidth=0.981, height=28)
-        tk.Label(self.intel_wire, text="INTEL WIRE", font=("Consolas",8,"bold"),
-                 bg="#03131d", fg=self.colors["primary2"]).pack(side="left", padx=(12,8))
-        tk.Label(self.intel_wire, text="●", font=("Consolas",7,"bold"),
-                 bg="#03131d", fg=self.colors["danger"]).pack(side="left")
-        tk.Label(self.intel_wire, text="  SECURE VOICE CHANNEL / AI CORE / SYSTEM CONTROL / ENCRYPTED SESSION",
-                 font=("Consolas",7,"bold"), bg="#03131d", fg=self.colors["muted"]).pack(side="left")
-        self.wire_hash = tk.Label(self.intel_wire, text="HASH 1441D6FD4D7F", font=("Consolas",7,"bold"),
-                                  bg="#03131d", fg=self.colors["green"])
-        self.wire_hash.pack(side="right", padx=12)
+        self.header = tk.Frame(self.root, bg=self.colors["topbar"], highlightbackground=self.colors["border"], highlightthickness=1)
+        self.header.place(x=0, y=0, relwidth=1, height=58)
+        brand = tk.Frame(self.header, bg=self.colors["topbar"], width=260); brand.pack(side="left", fill="y", padx=(16, 0)); brand.pack_propagate(False)
+        self.logo_canvas = tk.Canvas(brand, width=34, height=34, bg=self.colors["topbar"], highlightthickness=0); self.logo_canvas.pack(side="left", pady=11)
+        self.logo_glow_outer = self.logo_canvas.create_oval(3,3,31,31,outline=self.colors["line2"],width=1)
+        self.logo_glow_mid = self.logo_canvas.create_oval(7,7,27,27,outline=self.colors["purple"],width=2)
+        self.logo_core = self.logo_canvas.create_oval(11,11,23,23,fill=self.colors["purple2"],outline=self.colors["purple3"],width=1)
+        self.logo_dot = self.logo_canvas.create_oval(15,15,19,19,fill="#ffffff",outline="")
+        tk.Label(brand,text="M I T A",font=("Segoe UI",11,"bold"),bg=self.colors["topbar"],fg=self.colors["text"]).pack(side="left",padx=10)
 
-        # header status matrix
-        self.header = tk.Frame(self.root, bg=self.colors["panel"],
-                               highlightbackground=self.colors["line"], highlightthickness=1)
-        self.header.place(x=14, y=42, relwidth=0.981, height=70)
+        center = tk.Frame(self.header,bg=self.colors["topbar"]); center.pack(side="left",fill="both",expand=True)
+        pill=tk.Frame(center,bg=self.colors["panel2"],highlightbackground=self.colors["border"],highlightthickness=1)
+        pill.pack(pady=12)
+        tk.Label(pill,text="●",font=("Segoe UI",8),bg=self.colors["panel2"],fg=self.colors["purple2"]).pack(side="left",padx=(12,5),pady=6)
+        tk.Label(pill,text="MITA  NEO 4.0",font=("Segoe UI",8,"bold"),bg=self.colors["panel2"],fg=self.colors["text"]).pack(side="left",pady=6)
+        tk.Label(pill,text="  •  ONLINE",font=("Segoe UI",7,"bold"),bg=self.colors["panel2"],fg=self.colors["muted"]).pack(side="left",padx=(8,12),pady=6)
 
-        brand = tk.Frame(self.header, bg=self.colors["panel"], width=330)
-        brand.pack(side="left", fill="y", padx=(14,4)); brand.pack_propagate(False)
-        tk.Label(brand, text="Ω", font=("Consolas",23,"bold"), bg=self.colors["panel"],
-                 fg=self.colors["primary2"]).pack(side="left", padx=(0,10))
-        bt=tk.Frame(brand,bg=self.colors["panel"]); bt.pack(side="left", pady=13)
-        tk.Label(bt,text="MITA // SECURE CORE",font=("Consolas",14,"bold"),bg=self.colors["panel"],
-                 fg=self.colors["text"]).pack(anchor="w")
-        tk.Label(bt,text="OPERATOR INTELLIGENCE CONSOLE",font=("Consolas",7,"bold"),bg=self.colors["panel"],
-                 fg=self.colors["muted"]).pack(anchor="w")
+        right=tk.Frame(self.header,bg=self.colors["topbar"]); right.pack(side="right",fill="y",padx=14)
+        tk.Label(right,text="КОМАНДЫ",font=("Segoe UI",8,"bold"),bg=self.colors["topbar"],fg=self.colors["muted"]).pack(side="left",padx=14)
+        tk.Label(right,text="439",font=("Segoe UI",7,"bold"),bg=self.colors["chip"],fg=self.colors["purple2"],padx=7,pady=2).pack(side="left")
+        tk.Label(right,text="НАСТРОЙКИ",font=("Segoe UI",8,"bold"),bg=self.colors["topbar"],fg=self.colors["muted"]).pack(side="left",padx=18)
+        self.header_clock=tk.Label(right,text="",font=("Segoe UI",8,"bold"),bg=self.colors["topbar"],fg=self.colors["text"]); self.header_clock.pack(side="left",padx=8)
 
-        def header_metric(title, value, color):
-            f=tk.Frame(self.header,bg=self.colors["panel"],highlightbackground="#0a2d3b",highlightthickness=1)
-            f.pack(side="left",fill="both",expand=True,padx=3,pady=9)
-            tk.Label(f,text=title,font=("Consolas",6,"bold"),bg=self.colors["panel"],fg=self.colors["dim"]).pack(anchor="w",padx=10,pady=(7,0))
-            tk.Label(f,text=value,font=("Consolas",8,"bold"),bg=self.colors["panel"],fg=color).pack(anchor="e",padx=10,pady=(0,5))
-            return f
-        header_metric("SYSTEM STATE","● OPERATIONAL",self.colors["green"])
-        header_metric("CIPHER ROTATION","00:40",self.colors["primary2"])
-        header_metric("RELAY HEALTH","99.995%",self.colors["text"])
+        self.body=tk.Frame(self.root,bg=self.colors["bg"]); self.body.place(x=0,y=58,relwidth=1,relheight=.872)
+        self.sidebar=tk.Frame(self.body,bg=self.colors["sidebar"],width=250,highlightbackground=self.colors["border"],highlightthickness=1)
+        self.sidebar.pack(side="left",fill="y"); self.sidebar.pack_propagate(False)
+        self.content=tk.Frame(self.body,bg=self.colors["bg"]); self.content.pack(side="left",fill="both",expand=True)
+        self.rightbar=tk.Frame(self.body,bg=self.colors["bg"],width=325); self.rightbar.pack(side="right",fill="y",padx=(0,12),pady=(12,8)); self.rightbar.pack_propagate(False)
 
-        self.header_clock = tk.Label(self.header,text="",font=("Consolas",8,"bold"),
-                                     bg=self.colors["panel"],fg=self.colors["primary2"],padx=14)
-        self.header_clock.pack(side="right",fill="y")
+        self.bottom_bar=tk.Frame(self.root,bg=self.colors["topbar"],highlightbackground=self.colors["border"],highlightthickness=1)
+        self.bottom_bar.place(x=0,rely=1,y=-56,relwidth=1,height=56)
+        leftb=tk.Frame(self.bottom_bar,bg=self.colors["topbar"]); leftb.pack(side="left",fill="y",padx=14)
+        tk.Label(leftb,text="☼",font=("Segoe UI Symbol",12),bg=self.colors["chip"],fg=self.colors["muted"],padx=10,pady=7).pack(side="left",pady=9)
+        tk.Label(leftb,text="🔊",font=("Segoe UI Emoji",10),bg=self.colors["topbar"],fg=self.colors["muted"]).pack(side="left",padx=(14,4))
+        self.bottom_volume=tk.Scale(leftb,from_=0,to=100,orient=tk.HORIZONTAL,showvalue=False,length=120,bg=self.colors["topbar"],troughcolor=self.colors["purple"],activebackground=self.colors["purple2"],highlightthickness=0,bd=0,sliderrelief="flat")
+        self.bottom_volume.set(70); self.bottom_volume.pack(side="left")
+        tk.Label(leftb,text="70%",font=("Segoe UI",8,"bold"),bg=self.colors["topbar"],fg=self.colors["muted"]).pack(side="left",padx=6)
+        home=tk.Label(self.bottom_bar,text="⌂",font=("Segoe UI Symbol",16,"bold"),bg=self.colors["purple"],fg="white",padx=17,pady=7,cursor="hand2")
+        home.place(relx=.5,rely=.5,anchor="center"); home.bind("<Button-1>",lambda e:self.switch_tab(0))
 
-        # three-column body: navigation / content / telemetry
-        self.body = tk.Frame(self.root, bg=self.colors["bg"])
-        self.body.place(x=14, y=120, relwidth=0.981, relheight=0.845)
-
-        self.sidebar = tk.Frame(self.body,bg=self.colors["panel"],
-                                highlightbackground=self.colors["line"],highlightthickness=1,width=238)
-        self.sidebar.pack(side="left",fill="y",padx=(0,8)); self.sidebar.pack_propagate(False)
-
-        self.content = tk.Frame(self.body,bg=self.colors["bg2"],
-                                highlightbackground=self.colors["line"],highlightthickness=1)
-        self.content.pack(side="left",fill="both",expand=True,padx=(0,8))
-
-        self.rightbar = tk.Frame(self.body,bg=self.colors["panel"],
-                                 highlightbackground=self.colors["line"],highlightthickness=1,width=238)
-        self.rightbar.pack(side="right",fill="y"); self.rightbar.pack_propagate(False)
-
-        self.build_sidebar()
-        self.build_content()
-        self.build_rightbar()
+        self.build_sidebar(); self.build_content(); self.build_rightbar()
         self.create_particles(); self.create_stars(); self.create_floating_stars()
         self.update_key_info(); self.switch_tab(0)
 
     def build_sidebar(self):
-        top=tk.Frame(self.sidebar,bg=self.colors["panel"]); top.pack(fill="x",padx=14,pady=(16,8))
-        tk.Label(top,text="OPERATOR PANEL",font=("Consolas",7,"bold"),bg=self.colors["panel"],fg=self.colors["dim"]).pack(anchor="w")
-        tk.Label(top,text="CONTROL NODE",font=("Consolas",13,"bold"),bg=self.colors["panel"],fg=self.colors["text"]).pack(anchor="w",pady=(3,0))
-        tk.Label(top,text="AUTHENTICATED // OMEGA",font=("Consolas",6,"bold"),bg=self.colors["panel"],fg=self.colors["green"]).pack(anchor="w",pady=(2,0))
-
         self.nav_items=[]
-        self._make_nav(self.sidebar,T("nav_main"),"⌂",0)
-        self._make_nav(self.sidebar,T("nav_chat"),"◉",1)
-        self._make_nav(self.sidebar,T("nav_commands"),"⌘",2)
-        self._make_nav(self.sidebar,T("nav_settings"),"⚙",3)
+        self._make_nav(self.sidebar,"Главная","⌂",0)
+        self._make_nav(self.sidebar,"Чат с Mita","◯",1)
+        self._make_nav(self.sidebar,"Управление ПК","▣",2)
+        self._make_nav(self.sidebar,"Команды","⌘",2)
+        self._make_nav(self.sidebar,"Сценарии","▱",2)
+        self._make_nav(self.sidebar,"Память","▤",1)
+        self._make_nav(self.sidebar,"Плагины","✧",3)
+        self._make_nav(self.sidebar,"Настройки","⚙",3)
+        tk.Label(self.sidebar,text="С О С Т О Я Н И Е",font=("Segoe UI",7,"bold"),bg=self.colors["sidebar"],fg=self.colors["dim"]).pack(anchor="w",padx=18,pady=(18,8))
+        for icon,name,state,col in [("⌁","Голос","Включено",self.colors["green"]),("♩","Микрофон","Включён",self.colors["green"]),("▣","Система","Оптимально",self.colors["green"])]:
+            r=tk.Frame(self.sidebar,bg=self.colors["sidebar"]); r.pack(fill="x",padx=16,pady=4)
+            tk.Label(r,text=icon,font=("Segoe UI Symbol",10),bg=self.colors["sidebar"],fg=self.colors["muted"],width=3).pack(side="left")
+            t=tk.Frame(r,bg=self.colors["sidebar"]); t.pack(side="left")
+            tk.Label(t,text=name,font=("Segoe UI",8,"bold"),bg=self.colors["sidebar"],fg=self.colors["text"]).pack(anchor="w")
+            tk.Label(t,text=state,font=("Segoe UI",7),bg=self.colors["sidebar"],fg=col).pack(anchor="w")
 
-        tk.Frame(self.sidebar,bg=self.colors["line"],height=1).pack(fill="x",padx=12,pady=12)
-
-        # network status module
-        net=self._card(self.sidebar,"NETWORK STATUS","LIVE")
-        net.pack(fill="x",padx=10,pady=4)
-        nf=tk.Frame(net.winfo_children()[0],bg=self.colors["panel"]); nf.pack(fill="x",padx=12,pady=(2,10))
-        tk.Label(nf,text="9/9 NODES ONLINE",font=("Consolas",9,"bold"),bg=self.colors["panel"],fg=self.colors["green"]).pack(anchor="w")
-        tk.Label(nf,text="VOICE RELAY  •  AI CORE",font=("Consolas",6,"bold"),bg=self.colors["panel"],fg=self.colors["muted"]).pack(anchor="w",pady=(2,0))
-
-        mode=self._card(self.sidebar,"PROCESSING MODE","MANUAL")
-        mode.pack(fill="x",padx=10,pady=5)
-        inner=mode.winfo_children()[0]
-        self.mode_label=tk.Label(inner,text=get_mode_name(_mita_mode),font=("Consolas",8,"bold"),
-                                 bg=self.colors["panel"],fg=self.colors["primary2"])
-        self.mode_label.pack(anchor="w",padx=12,pady=(3,5))
-        self.mode_button=self._button(inner,T("change_mode"),self.change_mode)
-        self.mode_button.pack(fill="x",padx=10,pady=(0,10))
-
-        voice=self._card(self.sidebar,"VOICE ENGINE","READY")
-        voice.pack(fill="x",padx=10,pady=5); vi=voice.winfo_children()[0]
-        self.engine_status=tk.Label(vi,text="● MITA CORE ONLINE",font=("Consolas",7,"bold"),bg=self.colors["panel"],fg=self.colors["green"])
-        self.engine_status.pack(anchor="w",padx=12,pady=(3,5))
-        self.manual_record_button=self._button(vi,"[ MIC ]  "+T("manual_input_btn"),self.toggle_manual_record,accent=True)
-        self.manual_record_button.pack(fill="x",padx=10,pady=3)
-        self.tts_mute_button=self._button(vi,"[ VOICE ]  "+T("voice_on"),self.toggle_tts_mute)
-        self.tts_mute_button.pack(fill="x",padx=10,pady=3)
-        self.corrector_button=self._button(vi,"[ TEXT ]  "+T("corrector_off"),self.toggle_corrector)
-        self.corrector_button.pack(fill="x",padx=10,pady=(3,10))
-
-        access=self._card(self.sidebar,"ACCESS TOKEN","SECURE")
-        access.pack(fill="x",padx=10,pady=5); ai=access.winfo_children()[0]
-        self.key_info_label=tk.Label(ai,text="",font=("Consolas",7,"bold"),bg=self.colors["panel"],fg=self.colors["text"],justify="left")
-        self.key_info_label.pack(anchor="w",padx=12,pady=(3,4))
-        self.change_key_btn=self._button(ai,T("change_key"),self.change_key)
-        self.change_key_btn.pack(fill="x",padx=10,pady=(0,10))
+        spacer=tk.Frame(self.sidebar,bg=self.colors["sidebar"]); spacer.pack(fill="both",expand=True)
+        orb=tk.Canvas(self.sidebar,width=100,height=100,bg=self.colors["sidebar"],highlightthickness=0); orb.pack(pady=(0,6))
+        for r,c in [(42,"#1e1235"),(34,"#2d1951"),(25,self.colors["purple"])] : orb.create_oval(50-r,50-r,50+r,50+r,fill=c,outline="")
+        for i,h in enumerate([20,32,42,28,38,24,34]): orb.create_rectangle(30+i*6,50-h/2,33+i*6,50+h/2,fill="#e1c8ff",outline="")
+        self.manual_record_button=self._button(self.sidebar,"Запустить",self.toggle_manual_record,accent=True); self.manual_record_button.pack(fill="x",padx=28,pady=(0,10))
+        self.mode_label=tk.Label(self.sidebar,text=get_mode_name(_mita_mode),font=("Segoe UI",7),bg=self.colors["sidebar"],fg=self.colors["muted"]); self.mode_label.pack()
+        self.mode_button=self._button(self.sidebar,"Сменить режим",self.change_mode); self.mode_button.pack(fill="x",padx=28,pady=4)
+        self.tts_mute_button=self._button(self.sidebar,T("voice_on"),self.toggle_tts_mute); self.tts_mute_button.pack(fill="x",padx=28,pady=4)
+        self.corrector_button=self._button(self.sidebar,T("corrector_off"),self.toggle_corrector); self.corrector_button.pack(fill="x",padx=28,pady=4)
+        self.engine_status=tk.Label(self.sidebar,text="● MITA ONLINE",font=("Segoe UI",7,"bold"),bg=self.colors["sidebar"],fg=self.colors["green"]); self.engine_status.pack(pady=(4,0))
+        self.key_info_label=tk.Label(self.sidebar,text="",font=("Segoe UI",6),bg=self.colors["sidebar"],fg=self.colors["muted"]); self.key_info_label.pack(pady=(2,0))
+        self.change_key_btn=self._button(self.sidebar,T("change_key"),self.change_key); self.change_key_btn.pack(fill="x",padx=28,pady=(4,10))
 
     def build_rightbar(self):
-        top=tk.Frame(self.rightbar,bg=self.colors["panel"]); top.pack(fill="x",padx=13,pady=(15,8))
-        tk.Label(top,text="TRACE DEFENSE",font=("Consolas",7,"bold"),bg=self.colors["panel"],fg=self.colors["dim"]).pack(anchor="w")
-        tk.Label(top,text="SYNCHRONIZATION",font=("Consolas",11,"bold"),bg=self.colors["panel"],fg=self.colors["text"]).pack(anchor="w",pady=(3,0))
+        ai=self._card(self.rightbar,"AI Помощник",None); ai.pack(fill="x",pady=(0,12)); a=ai.winfo_children()[0]
+        row=tk.Frame(a,bg=self.colors["panel"]); row.pack(fill="x",padx=14,pady=(5,14))
+        txt=tk.Frame(row,bg=self.colors["panel"]); txt.pack(side="left",fill="both",expand=True)
+        tk.Label(txt,text="Я готова помочь вам с любыми\nзадачами на компьютере",font=("Segoe UI",8),justify="left",bg=self.colors["panel"],fg=self.colors["muted"]).pack(anchor="w")
+        tk.Label(txt,text="●  Онлайн",font=("Segoe UI",7,"bold"),bg=self.colors["panel"],fg=self.colors["green"]).pack(anchor="w",pady=(8,0))
+        self.shield_canvas=tk.Canvas(row,width=96,height=96,bg=self.colors["panel"],highlightthickness=0); self.shield_canvas.pack(side="right")
+        for r,c in [(40,"#2b1748"),(31,"#472174"),(22,"#6734a4"),(12,"#8c58dc")]: self.shield_canvas.create_oval(48-r,48-r,48+r,48+r,outline=c,width=2)
+        self.shield_canvas.create_oval(42,42,54,54,fill=self.colors["purple2"],outline="")
 
-        shield=self._card(self.rightbar,"DEFENSE MATRIX","ACTIVE")
-        shield.pack(fill="x",padx=10,pady=5); si=shield.winfo_children()[0]
-        self.shield_canvas=tk.Canvas(si,bg=self.colors["panel"],highlightthickness=0,height=150)
-        self.shield_canvas.pack(fill="x",padx=8,pady=4)
-        c=self.shield_canvas; cx,cy=105,70
-        for r,col in [(52,"#0b3242"),(41,"#0d4b60"),(29,"#0e667e")]: c.create_oval(cx-r,cy-r,cx+r,cy+r,outline=col,width=1)
-        c.create_text(cx,cy,text="Ω",font=("Consolas",19,"bold"),fill=self.colors["green"])
-        c.create_text(cx,132,text="IDENTITY MASK  100%",font=("Consolas",6,"bold"),fill=self.colors["primary2"])
+        sysc=self._card(self.rightbar,"Система",None); sysc.pack(fill="x",pady=(0,12)); s=sysc.winfo_children()[0]
+        meters=tk.Frame(s,bg=self.colors["panel"]); meters.pack(fill="x",padx=12,pady=(4,12))
+        for title,val in [("CPU","13%"),("RAM","45%"),("ДИСК","83%")]:
+            c=tk.Canvas(meters,width=78,height=78,bg=self.colors["panel"],highlightthickness=0); c.pack(side="left",expand=True)
+            c.create_oval(12,8,66,62,outline="#2a2440",width=5); c.create_arc(12,8,66,62,start=90,extent=-235,style="arc",outline=self.colors["purple2"],width=5)
+            c.create_text(39,31,text=val,font=("Segoe UI",9,"bold"),fill=self.colors["text"]); c.create_text(39,69,text=title,font=("Segoe UI",6,"bold"),fill=self.colors["muted"])
+        self.ram_value=tk.Label(s,text="Температура: —",font=("Segoe UI",7),bg=self.colors["panel"],fg=self.colors["muted"]); self.ram_value.pack(side="left",padx=14,pady=(0,10))
+        self.audio_value=tk.Label(s,text="Сеть: 0.3 Мбит/с",font=("Segoe UI",7),bg=self.colors["panel"],fg=self.colors["muted"]); self.audio_value.pack(side="right",padx=14,pady=(0,10))
 
-        sync=self._card(self.rightbar,"LIVE SESSION","OMEGA ONLY")
-        sync.pack(fill="x",padx=10,pady=5); sy=sync.winfo_children()[0]
-        self.sync_canvas=tk.Canvas(sy,bg=self.colors["panel"],highlightthickness=0,height=140)
-        self.sync_canvas.pack(fill="x",padx=8,pady=5)
-        cc=self.sync_canvas; cc.create_oval(47,15,157,125,outline="#0b4054",width=10)
-        cc.create_arc(47,15,157,125,start=90,extent=-250,style="arc",outline=self.colors["primary"],width=6)
-        cc.create_text(102,62,text="99%",font=("Consolas",19,"bold"),fill=self.colors["primary"])
-        cc.create_text(102,88,text="LINK STABLE",font=("Consolas",7,"bold"),fill=self.colors["muted"])
-
-        log=self._card(self.rightbar,"ENCRYPTED EVENT LOG","LIVE")
-        log.pack(fill="both",expand=True,padx=10,pady=5); li=log.winfo_children()[0]
-        self.event_log=tk.Text(li,bg="#020c12",fg=self.colors["muted"],font=("Consolas",7),bd=0,relief="flat",height=10,padx=8,pady=8)
-        self.event_log.pack(fill="both",expand=True,padx=8,pady=(4,8))
-        self.event_log.insert("end","22:54:58  CORE BOOT OK\n22:54:59  VOICE RELAY READY\n22:55:00  AI CHANNEL SEALED\n22:55:01  TRACE SHIELD ACTIVE\n22:55:02  WAITING REQUEST...\n")
-        self.event_log.config(state="disabled")
+        proc=self._card(self.rightbar,"Активные процессы","Посмотреть всё"); proc.pack(fill="x",pady=(0,12)); p=proc.winfo_children()[0]
+        for n,v in [("obs64","22.2%"),("Msedge","11.3%"),("msedgewebview2","11.1%"),("Msedge","5.8%")]:
+            r=tk.Frame(p,bg=self.colors["panel"]); r.pack(fill="x",padx=12,pady=5)
+            tk.Label(r,text="●",font=("Segoe UI",8),bg=self.colors["panel"],fg=self.colors["purple2"]).pack(side="left")
+            tk.Label(r,text=n,font=("Segoe UI",8),bg=self.colors["panel"],fg=self.colors["text"]).pack(side="left",padx=8)
+            tk.Label(r,text=v,font=("Segoe UI",8,"bold"),bg=self.colors["panel"],fg=self.colors["muted"]).pack(side="right")
+        log=self._card(self.rightbar,"Голосовые команды",None); log.pack(fill="both",expand=True); li=log.winfo_children()[0]
+        self.event_log=tk.Text(li,bg=self.colors["panel"],fg=self.colors["muted"],font=("Segoe UI",7),bd=0,height=5,padx=12,pady=8)
+        self.event_log.pack(fill="both",expand=True); self.event_log.insert("end","439 активных команд\nMita готова к работе\n"); self.event_log.config(state="disabled")
+        self.sync_canvas=tk.Canvas(self.rightbar,width=1,height=1,bg=self.colors["bg"],highlightthickness=0)
 
     def build_content(self):
-        self.pages = {}
-        self.build_home_page()
-        self.build_chat_page()
-        self.build_commands_page()
-        self.build_settings_page()
+        self.pages={}; self.build_home_page(); self.build_chat_page(); self.build_commands_page(); self.build_settings_page()
 
     def _page(self):
-        f = tk.Frame(self.content, bg=self.colors["bg2"])
-        return f
+        return tk.Frame(self.content,bg=self.colors["bg"])
 
     def build_home_page(self):
-        page=self._page(); self.pages[0]=page
-        # operation notice strip
-        notice=tk.Frame(page,bg="#07141b",highlightbackground="#7b5616",highlightthickness=1)
-        notice.pack(fill="x",padx=14,pady=(14,8))
-        tk.Label(notice,text="OPERATOR NOTICE",font=("Consolas",7,"bold"),bg="#07141b",fg=self.colors["danger"],padx=10,pady=8).pack(side="left")
-        tk.Label(notice,text="Secure voice dispatch active. Commands are relayed individually through MITA CORE.",font=("Consolas",7),bg="#07141b",fg=self.colors["muted"]).pack(side="left")
-        tk.Label(notice,text="PROTOCOL 7.4",font=("Consolas",6,"bold"),bg="#07141b",fg="#a87820",padx=10).pack(side="right")
+        page = self._page(); self.pages[0] = page
 
-        grid=tk.Frame(page,bg=self.colors["bg2"]); grid.pack(fill="both",expand=True,padx=14,pady=(0,8))
-        grid.columnconfigure(0,weight=4); grid.columnconfigure(1,weight=2)
-        grid.rowconfigure(0,weight=3); grid.rowconfigure(1,weight=2)
+        # ===== NEO HERO =====
+        hero = tk.Frame(page, bg=self.colors["bg"])
+        hero.pack(fill="x", padx=28, pady=(22, 10))
 
-        core=self._card(grid,"MITA NETWORK CORE","STREAMING")
-        core.grid(row=0,column=0,rowspan=2,sticky="nsew",padx=(0,6),pady=4)
-        ci=core.winfo_children()[0]
-        self.core_canvas=tk.Canvas(ci,bg="#020d14",highlightthickness=0)
-        self.core_canvas.pack(fill="both",expand=True,padx=8,pady=(3,8)); self.core_canvas.bind("<Configure>",self._resize_core)
+        hero_left = tk.Frame(hero, bg=self.colors["bg"])
+        hero_left.pack(side="left", fill="x", expand=True)
+        tk.Label(hero_left, text="M I T A  //  NEO CORE", font=("Segoe UI", 8, "bold"),
+                 bg=self.colors["bg"], fg=self.colors["purple2"]).pack(anchor="w")
+        title_row = tk.Frame(hero_left, bg=self.colors["bg"]); title_row.pack(anchor="w", pady=(3, 0))
+        tk.Label(title_row, text="Твой AI-помощник", font=("Segoe UI", 26, "bold"),
+                 bg=self.colors["bg"], fg=self.colors["text"]).pack(side="left")
+        self.neo_online_dot = tk.Label(title_row, text="  ● ONLINE", font=("Segoe UI", 8, "bold"),
+                                       bg=self.colors["bg"], fg=self.colors["green"])
+        self.neo_online_dot.pack(side="left", padx=(12, 0), pady=(9, 0))
+        self.neo_subtitle = tk.Label(hero_left,
+            text="Голос • AI • музыка • управление Windows • быстрые действия",
+            font=("Segoe UI", 9), bg=self.colors["bg"], fg=self.colors["muted"])
+        self.neo_subtitle.pack(anchor="w", pady=(3, 0))
 
-        status=self._card(grid,"SYSTEM TELEMETRY","REAL TIME")
-        status.grid(row=0,column=1,sticky="nsew",padx=(6,0),pady=4); si=status.winfo_children()[0]
-        sf=tk.Frame(si,bg=self.colors["panel"]); sf.pack(fill="both",expand=True,padx=12,pady=(3,10))
-        self.status_text=tk.Label(sf,text=T("ready"),font=("Consolas",11,"bold"),bg=self.colors["panel"],fg=self.colors["primary2"])
-        self.status_text.pack(anchor="w")
-        self.status_sub=tk.Label(sf,text=T("waiting"),font=("Consolas",7),bg=self.colors["panel"],fg=self.colors["muted"])
-        self.status_sub.pack(anchor="w",pady=(2,12))
-        # segmented telemetry bars
-        for label,val,col in [("RELAY HEALTH",99,self.colors["green"]),("ROUTE ENTROPY",97,self.colors["primary"]),("VOICE LINK",92,self.colors["primary2"])]:
-            tk.Label(sf,text=f"{label}  {val}%",font=("Consolas",6,"bold"),bg=self.colors["panel"],fg=self.colors["muted"]).pack(anchor="w",pady=(3,1))
-            bar=tk.Frame(sf,bg="#0a2733",height=4); bar.pack(fill="x"); fill=tk.Frame(bar,bg=col,height=4); fill.place(x=0,y=0,relwidth=val/100,relheight=1)
-        self.ram_value=tk.Label(sf,text="— MB",font=("Consolas",16,"bold"),bg=self.colors["panel"],fg=self.colors["text"])
-        self.ram_value.pack(anchor="w",pady=(14,0))
-        tk.Label(sf,text="RAM / PROCESS MEMORY",font=("Consolas",6,"bold"),bg=self.colors["panel"],fg=self.colors["dim"]).pack(anchor="w")
-        self.audio_value=tk.Label(sf,text="● QUIET",font=("Consolas",8,"bold"),bg=self.colors["panel"],fg=self.colors["muted"])
-        self.audio_value.pack(anchor="w",pady=(10,0))
+        hero_right = tk.Frame(hero, bg=self.colors["panel2"], highlightbackground=self.colors["border"], highlightthickness=1)
+        hero_right.pack(side="right", padx=(12,0))
+        self.neo_clock = tk.Label(hero_right, text="--:--", font=("Segoe UI", 16, "bold"),
+                                  bg=self.colors["panel2"], fg=self.colors["text"], padx=16, pady=6)
+        self.neo_clock.pack()
+        self.neo_mode = tk.Label(hero_right, text=get_mode_name(_mita_mode), font=("Segoe UI", 7, "bold"),
+                                 bg=self.colors["panel2"], fg=self.colors["purple2"], padx=16, pady=0)
+        self.neo_mode.pack()
 
-        quick=self._card(grid,"MANUAL DISPATCH","CONTROL")
-        quick.grid(row=1,column=1,sticky="nsew",padx=(6,0),pady=4); qi=quick.winfo_children()[0]
-        q=tk.Frame(qi,bg=self.colors["panel"]); q.pack(fill="both",expand=True,padx=10,pady=(2,10))
-        self._button(q,"[ MIC ]  REQUEST SIGNAL",self.toggle_manual_record,accent=True).pack(fill="x",pady=3)
-        self._button(q,"[ CHAT ]  OPEN CHANNEL",lambda:self.switch_tab(1)).pack(fill="x",pady=3)
-        self._button(q,"[ STOP ]  MUSIC RELAY",self.stop_music_click,danger=True).pack(fill="x",pady=3)
-        self._button(q,"[ CFG ]  SYSTEM SETTINGS",lambda:self.switch_tab(3)).pack(fill="x",pady=3)
+        # ===== LIVE WEATHER CARD =====
+        weather_outer = tk.Frame(page, bg=self.colors["line2"])
+        weather_outer.pack(fill="x", padx=28, pady=(0, 10))
+        weather = tk.Frame(weather_outer, bg=self.colors["panel2"], cursor="hand2")
+        weather.pack(fill="x", expand=True, padx=1, pady=1)
 
-        music=self._card(page,"NOW PLAYING / AUDIO RELAY","MUSIC CORE")
-        music.pack(fill="x",padx=14,pady=(0,14)); mi=music.winfo_children()[0]
-        mf=tk.Frame(mi,bg=self.colors["panel"]); mf.pack(fill="x",padx=12,pady=(2,10))
-        eq=tk.Canvas(mf,width=66,height=38,bg=self.colors["panel"],highlightthickness=0); eq.pack(side="left",padx=(0,10))
-        for i,h in enumerate([9,18,28,15,24,11,20]): eq.create_rectangle(4+i*8,32-h,8+i*8,32,fill=self.colors["primary"],outline="")
-        mt=tk.Frame(mf,bg=self.colors["panel"]); mt.pack(side="left",fill="x",expand=True)
-        self.music_title=tk.Label(mt,text="NO ACTIVE AUDIO STREAM",font=("Consolas",9,"bold"),bg=self.colors["panel"],fg=self.colors["text"]); self.music_title.pack(anchor="w")
-        self.music_meta=tk.Label(mt,text="VOICE QUERY: «Мита, включи песню…»",font=("Consolas",6,"bold"),bg=self.colors["panel"],fg=self.colors["muted"]); self.music_meta.pack(anchor="w",pady=(2,0))
-        self.music_stop_button=self._button(mf,"TERMINATE STREAM",self.stop_music_click,danger=True); self.music_stop_button.pack(side="right"); self.music_stop_button.config(state=tk.DISABLED)
+        weather_left = tk.Frame(weather, bg=self.colors["panel2"])
+        weather_left.pack(side="left", fill="x", expand=True, padx=(14, 6), pady=10)
+
+        self.weather_orb = tk.Canvas(weather_left, width=54, height=54, bg=self.colors["panel2"], highlightthickness=0)
+        self.weather_orb.pack(side="left", padx=(0, 12))
+        self.weather_orb.create_oval(4, 4, 50, 50, fill=self.colors["chip"], outline=self.colors["purple"], width=1)
+        self.weather_orb_text = self.weather_orb.create_text(27, 27, text="☁", font=("Segoe UI Emoji", 22), fill=self.colors["text"])
+
+        weather_text = tk.Frame(weather_left, bg=self.colors["panel2"])
+        weather_text.pack(side="left", fill="x", expand=True)
+        tk.Label(weather_text, text="LIVE WEATHER", font=("Segoe UI", 7, "bold"),
+                 bg=self.colors["panel2"], fg=self.colors["purple2"]).pack(anchor="w")
+        self.weather_main_label = tk.Label(weather_text, text="Загружаю погоду…",
+                 font=("Segoe UI", 12, "bold"), bg=self.colors["panel2"], fg=self.colors["text"], anchor="w")
+        self.weather_main_label.pack(fill="x", pady=(2, 1))
+        self.weather_sub_label = tk.Label(weather_text, text="Определяю местоположение автоматически",
+                 font=("Segoe UI", 7), bg=self.colors["panel2"], fg=self.colors["muted"], anchor="w")
+        self.weather_sub_label.pack(fill="x")
+
+        weather_right = tk.Frame(weather, bg=self.colors["panel2"])
+        weather_right.pack(side="right", padx=(6, 14), pady=10)
+        self.weather_refresh_label = tk.Label(weather_right, text="↻  ОБНОВИТЬ", font=("Segoe UI", 7, "bold"),
+                 bg=self.colors["chip"], fg=self.colors["purple2"], padx=10, pady=6, cursor="hand2")
+        self.weather_refresh_label.pack()
+        self.weather_updated_label = tk.Label(weather_right, text="AUTO • 10 MIN", font=("Segoe UI", 6),
+                 bg=self.colors["panel2"], fg=self.colors["muted"])
+        self.weather_updated_label.pack(pady=(4, 0))
+
+        for w in (weather, weather_left, weather_text, self.weather_main_label, self.weather_sub_label,
+                  self.weather_orb, weather_right, self.weather_refresh_label):
+            w.bind("<Button-1>", lambda e: self.refresh_weather_widget(force=True))
+
+        # ===== LIVE VOICE CARD =====
+        voice_outer = tk.Frame(page, bg=self.colors["line2"])
+        voice_outer.pack(fill="x", padx=28, pady=(4, 10))
+        voice = tk.Frame(voice_outer, bg=self.colors["panel2"])
+        voice.pack(fill="both", expand=True, padx=1, pady=1)
+
+        top = tk.Frame(voice, bg=self.colors["panel2"]); top.pack(fill="x", padx=16, pady=(12, 5))
+        self.live_voice_badge = tk.Label(top, text="●  МИКРОФОН ГОТОВ", font=("Segoe UI", 8, "bold"),
+                                         bg=self.colors["panel2"], fg=self.colors["green"])
+        self.live_voice_badge.pack(side="left")
+        tk.Label(top, text="говори: «Стелла ...»", font=("Segoe UI", 7),
+                 bg=self.colors["panel2"], fg=self.colors["muted"]).pack(side="right")
+
+        self.live_voice_label = tk.Label(
+            voice, text="Я покажу здесь то, что слышу...",
+            font=("Segoe UI", 15, "bold"), anchor="w", justify="left",
+            bg=self.colors["panel2"], fg=self.colors["text"], wraplength=690
+        )
+        self.live_voice_label.pack(fill="x", padx=16, pady=(1, 5))
+
+        self.voice_wave_canvas = tk.Canvas(voice, height=40, bg=self.colors["panel2"], highlightthickness=0)
+        self.voice_wave_canvas.pack(fill="x", padx=14, pady=(0, 10))
+        self.voice_wave_bars = []
+        for i in range(46):
+            x = 5 + i * 15
+            bar = self.voice_wave_canvas.create_rectangle(x, 19, x+7, 21, fill=self.colors["line2"], outline="")
+            self.voice_wave_bars.append(bar)
+
+        # ===== CENTER GRID: NOW PLAYING + QUICK CORE =====
+        middle = tk.Frame(page, bg=self.colors["bg"])
+        middle.pack(fill="x", padx=28, pady=(0, 10))
+        middle.columnconfigure(0, weight=3); middle.columnconfigure(1, weight=2)
+
+        player_outer = tk.Frame(middle, bg=self.colors["border"])
+        player_outer.grid(row=0, column=0, sticky="nsew", padx=(0,6))
+        player = tk.Frame(player_outer, bg=self.colors["panel"])
+        player.pack(fill="both", expand=True, padx=1, pady=1)
+
+        ph = tk.Frame(player, bg=self.colors["panel"]); ph.pack(fill="x", padx=15, pady=(11,4))
+        tk.Label(ph, text="♫  NOW PLAYING", font=("Segoe UI",8,"bold"), bg=self.colors["panel"], fg=self.colors["purple2"]).pack(side="left")
+        self.player_state = tk.Label(ph, text="IDLE", font=("Segoe UI",7,"bold"), bg=self.colors["chip"], fg=self.colors["muted"], padx=8, pady=2)
+        self.player_state.pack(side="right")
+
+        self.player_title = tk.Label(player, text="Музыка не запущена", font=("Segoe UI",13,"bold"),
+                                     bg=self.colors["panel"], fg=self.colors["text"], anchor="w")
+        self.player_title.pack(fill="x", padx=15, pady=(2,1))
+        self.player_meta = tk.Label(player, text="Скажи: «Стелла, включи песню ...»", font=("Segoe UI",7),
+                                    bg=self.colors["panel"], fg=self.colors["muted"], anchor="w")
+        self.player_meta.pack(fill="x", padx=15)
+
+        self.player_vis_canvas = tk.Canvas(player, height=52, bg=self.colors["panel"], highlightthickness=0)
+        self.player_vis_canvas.pack(fill="x", padx=14, pady=(5,2))
+        self.player_vis_bars=[]
+        for i in range(34):
+            x=4+i*14
+            b=self.player_vis_canvas.create_rectangle(x,25,x+7,28,fill=self.colors["purple"],outline="")
+            self.player_vis_bars.append(b)
+
+        progress_row = tk.Frame(player,bg=self.colors["panel"]); progress_row.pack(fill="x",padx=15,pady=(0,5))
+        self.player_time = tk.Label(progress_row,text="00:00",font=("Consolas",7),bg=self.colors["panel"],fg=self.colors["muted"]); self.player_time.pack(side="left")
+        self.player_progress_canvas=tk.Canvas(progress_row,height=8,bg=self.colors["panel"],highlightthickness=0); self.player_progress_canvas.pack(side="left",fill="x",expand=True,padx=8)
+        self.player_progress_bg=self.player_progress_canvas.create_rectangle(0,2,400,6,fill=self.colors["chip"],outline="")
+        self.player_progress_fg=self.player_progress_canvas.create_rectangle(0,2,1,6,fill=self.colors["purple2"],outline="")
+        self.player_duration_label=tk.Label(progress_row,text="--:--",font=("Consolas",7),bg=self.colors["panel"],fg=self.colors["muted"]); self.player_duration_label.pack(side="right")
+
+        controls=tk.Frame(player,bg=self.colors["panel"]); controls.pack(fill="x",padx=15,pady=(2,12))
+        self.neo_music_stop=self._button(controls,"■  СТОП",self.stop_music_click,danger=True); self.neo_music_stop.pack(side="left")
+        self._button(controls,"−10",lambda:volume_down(self)).pack(side="left",padx=(7,4))
+        self._button(controls,"+10",lambda:volume_up(self)).pack(side="left",padx=4)
+        self.neo_volume_label=tk.Label(controls,text=f"{_music_volume}%",font=("Segoe UI",8,"bold"),bg=self.colors["panel"],fg=self.colors["purple2"]); self.neo_volume_label.pack(side="right")
+
+        quick_outer = tk.Frame(middle,bg=self.colors["border"])
+        quick_outer.grid(row=0,column=1,sticky="nsew",padx=(6,0))
+        quick=tk.Frame(quick_outer,bg=self.colors["panel"]); quick.pack(fill="both",expand=True,padx=1,pady=1)
+        tk.Label(quick,text="QUICK CORE",font=("Segoe UI",8,"bold"),bg=self.colors["panel"],fg=self.colors["purple2"]).pack(anchor="w",padx=14,pady=(11,7))
+        qgrid=tk.Frame(quick,bg=self.colors["panel"]); qgrid.pack(fill="both",expand=True,padx=10,pady=(0,10))
+        qitems=[
+            ("🎙","Голос",self.toggle_manual_record),
+            ("💬","Чат",lambda:self.switch_tab(1)),
+            ("⌘","Команды",lambda:self.switch_tab(2)),
+            ("☁","Погода",lambda:self.refresh_weather_widget(force=True)),
+            ("✎","Заметки",self.open_notes),
+            ("⌁","Система",self.open_telemetry_center),
+        ]
+        for i,(ic,tx,cmd) in enumerate(qitems):
+            cell=tk.Frame(qgrid,bg=self.colors["panel2"],highlightbackground=self.colors["border"],highlightthickness=1,cursor="hand2")
+            cell.grid(row=i//2,column=i%2,sticky="nsew",padx=4,pady=4,ipady=7)
+            qgrid.columnconfigure(i%2,weight=1); qgrid.rowconfigure(i//2,weight=1)
+            ico=tk.Label(cell,text=ic,font=("Segoe UI Emoji",12),bg=self.colors["panel2"],fg=self.colors["purple2"]); ico.pack(pady=(5,1))
+            lab=tk.Label(cell,text=tx,font=("Segoe UI",7,"bold"),bg=self.colors["panel2"],fg=self.colors["text"]); lab.pack(pady=(0,5))
+            for w in (cell,ico,lab): w.bind("<Button-1>",lambda e,c=cmd:c())
+
+        # ===== BOTTOM SMART STRIP =====
+        strip=tk.Frame(page,bg=self.colors["bg"]); strip.pack(fill="x",padx=28,pady=(0,12))
+        cards=[
+            ("AI MODE",lambda:get_mode_name(_mita_mode),"◇"),
+            ("VOICE",lambda:"ON" if not self.tts_muted else "MUTED","♩"),
+            ("CORRECTOR",lambda:"ON" if self.corrector_enabled else "OFF","Aa"),
+            ("FX",lambda:"ON" if self._effects_enabled else "OFF","✦"),
+        ]
+        self.neo_info_values=[]
+        for i,(name,getter,ic) in enumerate(cards):
+            c=tk.Frame(strip,bg=self.colors["panel2"],highlightbackground=self.colors["border"],highlightthickness=1)
+            c.pack(side="left",fill="x",expand=True,padx=(0 if i==0 else 4,0))
+            tk.Label(c,text=ic,font=("Segoe UI Symbol",11,"bold"),bg=self.colors["panel2"],fg=self.colors["purple2"]).pack(side="left",padx=(10,7),pady=8)
+            tx=tk.Frame(c,bg=self.colors["panel2"]); tx.pack(side="left",fill="x",expand=True,pady=6)
+            tk.Label(tx,text=name,font=("Segoe UI",6,"bold"),bg=self.colors["panel2"],fg=self.colors["muted"]).pack(anchor="w")
+            val=tk.Label(tx,text=getter(),font=("Segoe UI",7,"bold"),bg=self.colors["panel2"],fg=self.colors["text"]); val.pack(anchor="w")
+            self.neo_info_values.append((val,getter))
+
+        # Compatibility widgets used by old logic; hidden but kept alive.
+        hidden=tk.Frame(page,bg=self.colors["bg"]); hidden.pack()
+        self.core_canvas=tk.Canvas(hidden,width=1,height=1,bg=self.colors["bg"],highlightthickness=0); self.core_canvas.pack(); self.core_canvas.bind("<Configure>",self._resize_core)
+        self.status_text=tk.Label(hidden,text=T("ready"),bg=self.colors["bg"]); self.status_sub=tk.Label(hidden,text=T("waiting"),bg=self.colors["bg"])
+        self.music_title=tk.Label(hidden,text="NO ACTIVE AUDIO STREAM",bg=self.colors["bg"]); self.music_meta=tk.Label(hidden,text="",bg=self.colors["bg"])
+        self.music_stop_button=self._button(hidden,"STOP",self.stop_music_click,danger=True); self.music_stop_button.config(state=tk.DISABLED)
 
     def build_chat_page(self):
         page=self._page(); self.pages[1]=page
-        head=tk.Frame(page,bg=self.colors["bg2"]); head.pack(fill="x",padx=16,pady=(15,8))
-        tk.Label(head,text="ENCRYPTED AI CHANNEL",font=("Consolas",14,"bold"),bg=self.colors["bg2"],fg=self.colors["text"]).pack(side="left")
-        self.chat_counter=tk.Label(head,text="0 SIGNALS",font=("Consolas",7,"bold"),bg=self.colors["bg2"],fg=self.colors["green"]); self.chat_counter.pack(side="right",pady=6)
-
-        card=self._card(page,"CLASSIFIED SIGNAL ARCHIVE","MANUAL RELAY"); card.pack(fill="both",expand=True,padx=16,pady=(0,14)); ci=card.winfo_children()[0]
-        self.chat_display=scrolledtext.ScrolledText(ci,bg="#020b11",fg=self.colors["text"],font=("Consolas",9),wrap=tk.WORD,bd=0,relief="flat",insertbackground=self.colors["primary2"],padx=18,pady=14,selectbackground="#0b4f65")
+        head=tk.Frame(page,bg=self.colors["bg"]); head.pack(fill="x",padx=34,pady=(28,10))
+        tk.Label(head,text="Чат с Mita",font=("Segoe UI",20,"bold"),bg=self.colors["bg"],fg=self.colors["text"]).pack(side="left")
+        self.chat_counter=tk.Label(head,text="0 сообщений",font=("Segoe UI",8),bg=self.colors["bg"],fg=self.colors["purple2"]); self.chat_counter.pack(side="right")
+        card=self._card(page,"Диалог",None); card.pack(fill="both",expand=True,padx=34,pady=(0,16)); ci=card.winfo_children()[0]
+        self.chat_display=scrolledtext.ScrolledText(ci,bg=self.colors["panel"],fg=self.colors["text"],font=("Segoe UI",9),wrap=tk.WORD,bd=0,relief="flat",insertbackground=self.colors["purple2"],padx=18,pady=14,selectbackground=self.colors["purple"])
         self.chat_display.pack(fill="both",expand=True,padx=8,pady=(3,8)); self.chat_display.config(state=tk.DISABLED)
-        self.chat_display.tag_config("mita_name",foreground=self.colors["green"],font=("Consolas",8,"bold"))
-        self.chat_display.tag_config("mita_text",foreground="#b9dce7",font=("Consolas",9))
-        self.chat_display.tag_config("user_name",foreground=self.colors["primary2"],font=("Consolas",8,"bold"))
-        self.chat_display.tag_config("user_text",foreground=self.colors["text"],font=("Consolas",9))
-
-        self.chat_menu=Menu(self.root,tearoff=0,bg=self.colors["panel2"],fg=self.colors["text"],activebackground="#0b4f65",activeforeground="white",bd=0)
-        self.chat_menu.add_command(label="COPY SIGNAL",command=self.copy_selected_message); self.chat_menu.add_command(label="COPY ARCHIVE",command=self.copy_all_chat); self.chat_menu.add_separator(); self.chat_menu.add_command(label="PURGE ARCHIVE",command=self.clear_chat)
+        self.chat_display.tag_config("mita_name",foreground=self.colors["purple2"],font=("Segoe UI",8,"bold")); self.chat_display.tag_config("mita_text",foreground=self.colors["text"],font=("Segoe UI",9))
+        self.chat_display.tag_config("user_name",foreground=self.colors["green"],font=("Segoe UI",8,"bold")); self.chat_display.tag_config("user_text",foreground=self.colors["text"],font=("Segoe UI",9))
+        self.chat_menu=Menu(self.root,tearoff=0,bg=self.colors["panel2"],fg=self.colors["text"],activebackground=self.colors["purple"],activeforeground="white",bd=0)
+        self.chat_menu.add_command(label="Копировать",command=self.copy_selected_message); self.chat_menu.add_command(label="Копировать всё",command=self.copy_all_chat); self.chat_menu.add_separator(); self.chat_menu.add_command(label="Очистить",command=self.clear_chat)
         self.chat_display.bind("<Button-3>",self.show_chat_menu); self.chat_display.bind("<Control-c>",lambda e:self.copy_selected_message()); self.chat_display.bind("<Control-a>",lambda e:self.select_all_chat())
-
         bottom=tk.Frame(ci,bg=self.colors["panel"]); bottom.pack(fill="x",padx=8,pady=(0,8))
-        shell=tk.Frame(bottom,bg=self.colors["line"],bd=0); shell.pack(side="left",fill="x",expand=True,padx=(0,8))
-        self.chat_input=tk.Entry(shell,bg="#03131d",fg=self.colors["text"],font=("Consolas",9),relief="flat",bd=0,insertbackground=self.colors["primary2"])
-        self.chat_input.pack(fill="x",padx=1,pady=1,ipady=12); self.chat_input.bind("<Return>",lambda e:self.send_chat_message()); self.chat_input.bind("<Button-3>",self.show_input_menu); self.chat_input.bind("<Control-a>",lambda e:self.select_all_input()); self.chat_input.bind("<Control-c>",lambda e:self.copy_input_text()); self.chat_input.bind("<Control-v>",lambda e:self.paste_input_text()); self.chat_input.bind("<Control-x>",lambda e:self.cut_input_text())
-        self.send_button=self._button(bottom,"TRANSMIT  ▶",self.send_chat_message,accent=True); self.send_button.pack(side="right")
-        self.input_menu=Menu(self.root,tearoff=0,bg=self.colors["panel2"],fg=self.colors["text"],activebackground="#0b4f65",bd=0)
-        self.input_menu.add_command(label="CUT",command=self.cut_input_text); self.input_menu.add_command(label="COPY",command=self.copy_input_text); self.input_menu.add_command(label="PASTE",command=self.paste_input_text); self.input_menu.add_separator(); self.input_menu.add_command(label="CLEAR",command=self.clear_input_text); self.input_menu.add_command(label="SELECT ALL",command=self.select_all_input)
+        self.chat_input=tk.Entry(bottom,bg=self.colors["panel2"],fg=self.colors["text"],font=("Segoe UI",9),relief="flat",bd=0,insertbackground=self.colors["purple2"]); self.chat_input.pack(side="left",fill="x",expand=True,ipady=11,padx=(0,8))
+        self.chat_input.bind("<Return>",lambda e:self.send_chat_message()); self.chat_input.bind("<Button-3>",self.show_input_menu); self.chat_input.bind("<Control-a>",lambda e:self.select_all_input()); self.chat_input.bind("<Control-c>",lambda e:self.copy_input_text()); self.chat_input.bind("<Control-v>",lambda e:self.paste_input_text()); self.chat_input.bind("<Control-x>",lambda e:self.cut_input_text())
+        self.send_button=self._button(bottom,"Отправить  ▶",self.send_chat_message,accent=True); self.send_button.pack(side="right")
+        self.input_menu=Menu(self.root,tearoff=0,bg=self.colors["panel2"],fg=self.colors["text"],activebackground=self.colors["purple"],bd=0)
+        self.input_menu.add_command(label="Вырезать",command=self.cut_input_text); self.input_menu.add_command(label="Копировать",command=self.copy_input_text); self.input_menu.add_command(label="Вставить",command=self.paste_input_text); self.input_menu.add_separator(); self.input_menu.add_command(label="Очистить",command=self.clear_input_text); self.input_menu.add_command(label="Выделить всё",command=self.select_all_input)
         hello_msg=(f"{T('mita_greeting')}\n{T('mita_mode')}{get_mode_name(_mita_mode)}\n{T('mita_corrector')}{T('corrector_off_info') if not _text_corrector_enabled else T('corrector_on_info')}\n{T('mita_lang')}\n{T('mita_help')}")
         self.add_chat_message("Мита",hello_msg,is_mita=True)
 
     def build_commands_page(self):
         page=self._page(); self.pages[2]=page
-        head=tk.Frame(page,bg=self.colors["bg2"]); head.pack(fill="x",padx=16,pady=(15,8))
-        tk.Label(head,text="COMMAND PROTOCOLS",font=("Consolas",14,"bold"),bg=self.colors["bg2"],fg=self.colors["text"]).pack(anchor="w")
-        tk.Label(head,text="AUTHORIZED VOICE / SYSTEM OPERATIONS",font=("Consolas",7,"bold"),bg=self.colors["bg2"],fg=self.colors["muted"]).pack(anchor="w",pady=(2,0))
-        wrap=tk.Frame(page,bg=self.colors["bg2"]); wrap.pack(fill="both",expand=True,padx=16,pady=(0,14)); wrap.columnconfigure(0,weight=1); wrap.columnconfigure(1,weight=1); wrap.columnconfigure(2,weight=1)
-        commands=[("01","LAUNCH","Запусти [программа]","Discord / Roblox / Steam"),("02","WEB RELAY","Открой [сайт]","YouTube / Google / GitHub"),("03","TERMINATE","Закрой [программа]","Process shutdown"),("04","TYPE","Напиши [текст]","Input to active window"),("05","MINIMIZE","Сверни все","Windows desktop control"),("06","CAPTURE","Скриншот","Screen snapshot"),("07","CLIPBOARD","Скопируй / Вставь","Ctrl+C / Ctrl+V"),("08","DISPLAY ROUTE","Переведи на 1/2 монитор","Move active window"),("09","AUDIO QUERY","Песня [название]","Local / YouTube search"),("10","AUDIO GAIN","Громкость [0-200%]","Music volume"),("11","AUDIO STOP","Стоп музыка","Terminate stream"),("12","LANGUAGE","Смени язык","Keyboard language")]
-        for i,(code,title,cmd,desc) in enumerate(commands):
-            c=self._card(wrap,title,"PROTO "+code); r,col=divmod(i,3); c.grid(row=r,column=col,sticky="nsew",padx=4,pady=4); inner=c.winfo_children()[0]
-            box=tk.Frame(inner,bg=self.colors["panel"]); box.pack(fill="both",expand=True,padx=11,pady=(2,10))
-            tk.Label(box,text=cmd,font=("Consolas",8,"bold"),bg=self.colors["panel"],fg=self.colors["primary2"]).pack(anchor="w")
-            tk.Label(box,text=desc,font=("Consolas",6),bg=self.colors["panel"],fg=self.colors["muted"]).pack(anchor="w",pady=(3,0))
+        tk.Label(page,text="Команды",font=("Segoe UI",20,"bold"),bg=self.colors["bg"],fg=self.colors["text"]).pack(anchor="w",padx=34,pady=(28,12))
+        wrap=tk.Frame(page,bg=self.colors["bg"]); wrap.pack(fill="both",expand=True,padx=30,pady=(0,16))
+        commands=[("Открыть приложение","Запусти Discord / Roblox / Steam"),("Открыть сайт","Открой YouTube / Google"),("Закрыть приложение","Закрой Discord"),("Напечатать текст","Напиши [текст]"),("Свернуть окна","Сверни все"),("Скриншот","Сделай скриншот"),("Буфер обмена","Скопируй / Вставь"),("Монитор","Переведи на 1/2 монитор"),("Музыка","Песня [название]"),("Громкость","Громкость 50%"),("Стоп музыки","Стоп музыка"),("Язык","Смени язык"),("Погода рядом","Мита, какая сейчас погода?")]
+        for i,(title,desc) in enumerate(commands):
+            c=self._card(wrap,title,None); c.grid(row=i//3,column=i%3,sticky="nsew",padx=5,pady=5); wrap.columnconfigure(i%3,weight=1)
+            inner=c.winfo_children()[0]; tk.Label(inner,text=desc,font=("Segoe UI",8),bg=self.colors["panel"],fg=self.colors["muted"]).pack(anchor="w",padx=14,pady=(4,14))
 
     def build_settings_page(self):
         page=self._page(); self.pages[3]=page
-        head=tk.Frame(page,bg=self.colors["bg2"]); head.pack(fill="x",padx=16,pady=(15,8))
-        tk.Label(head,text="SYSTEM CONFIGURATION",font=("Consolas",14,"bold"),bg=self.colors["bg2"],fg=self.colors["text"]).pack(anchor="w")
-        tk.Label(head,text="OPERATOR-LEVEL PREFERENCES / SECURE LOCAL STATE",font=("Consolas",7,"bold"),bg=self.colors["bg2"],fg=self.colors["muted"]).pack(anchor="w",pady=(2,0))
-        scroll=tk.Frame(page,bg=self.colors["bg2"]); scroll.pack(fill="both",expand=True,padx=16,pady=(0,14)); scroll.columnconfigure(0,weight=1); scroll.columnconfigure(1,weight=1)
-
-        lang=self._card(scroll,"LANGUAGE MATRIX","INTERFACE"); lang.grid(row=0,column=0,sticky="nsew",padx=(0,5),pady=5); li=lang.winfo_children()[0]
-        lf=tk.Frame(li,bg=self.colors["panel"]); lf.pack(fill="x",padx=12,pady=(3,10))
-        tk.Label(lf,text="Active locale / response language",font=("Consolas",7),bg=self.colors["panel"],fg=self.colors["muted"]).pack(anchor="w",pady=(0,7))
-        self.lang_button=self._button(lf,"SWITCH → "+("УКРАЇНСЬКА" if UI_LANGUAGE=="ru" else "РУССКИЙ"),self.toggle_language); self.lang_button.pack(fill="x")
-
-        mode=self._card(scroll,"AI PROCESSING MODE","CORE"); mode.grid(row=0,column=1,sticky="nsew",padx=(5,0),pady=5); mi=mode.winfo_children()[0]
-        self.mode_setting_label=tk.Label(mi,text=get_mode_name(_mita_mode),font=("Consolas",9,"bold"),bg=self.colors["panel"],fg=self.colors["primary2"]); self.mode_setting_label.pack(anchor="w",padx=12,pady=(3,7))
-        self._button(mi,"CHANGE PROCESSING PROTOCOL",self.change_mode).pack(fill="x",padx=10,pady=(0,10))
-
-        music=self._card(scroll,"AUDIO GAIN CONTROL","0-200%"); music.grid(row=1,column=0,columnspan=2,sticky="nsew",pady=5); mui=music.winfo_children()[0]
-        mv=tk.Frame(mui,bg=self.colors["panel"]); mv.pack(fill="x",padx=12,pady=(3,10))
-        self.volume_label=tk.Label(mv,text=f"AUDIO GAIN: {_music_volume}%",font=("Consolas",8,"bold"),bg=self.colors["panel"],fg=self.colors["text"]); self.volume_label.pack(anchor="w")
-        self.volume_scale=tk.Scale(mv,from_=0,to=200,orient=tk.HORIZONTAL,bg=self.colors["panel"],fg=self.colors["primary2"],activebackground=self.colors["primary"],troughcolor="#092b39",highlightthickness=0,bd=0,showvalue=False,sliderrelief="flat",sliderlength=16,command=self.on_volume_change); self.volume_scale.pack(fill="x",pady=(6,0)); self.volume_scale.set(_music_volume)
-
-        access=self._card(scroll,"ACCESS CREDENTIAL","SECURITY"); access.grid(row=2,column=0,columnspan=2,sticky="nsew",pady=5); ac=access.winfo_children()[0]
-        ar=tk.Frame(ac,bg=self.colors["panel"]); ar.pack(fill="x",padx=12,pady=(3,10))
-        self.settings_key_label=tk.Label(ar,text="",font=("Consolas",8,"bold"),bg=self.colors["panel"],fg=self.colors["text"]); self.settings_key_label.pack(side="left")
-        self._button(ar,"ROTATE ACCESS KEY",self.change_key).pack(side="right")
+        tk.Label(page,text="Настройки",font=("Segoe UI",20,"bold"),bg=self.colors["bg"],fg=self.colors["text"]).pack(anchor="w",padx=34,pady=(28,12))
+        wrap=tk.Frame(page,bg=self.colors["bg"]); wrap.pack(fill="both",expand=True,padx=34,pady=(0,16)); wrap.columnconfigure(0,weight=1); wrap.columnconfigure(1,weight=1)
+        lang=self._card(wrap,"Язык интерфейса",None); lang.grid(row=0,column=0,sticky="nsew",padx=(0,6),pady=6); li=lang.winfo_children()[0]
+        self.lang_button=self._button(li,"Украинский" if UI_LANGUAGE=="ru" else "Русский",self.toggle_language); self.lang_button.pack(fill="x",padx=14,pady=(5,14))
+        mode=self._card(wrap,"Режим Mita",None); mode.grid(row=0,column=1,sticky="nsew",padx=(6,0),pady=6); mi=mode.winfo_children()[0]
+        self.mode_setting_label=tk.Label(mi,text=get_mode_name(_mita_mode),font=("Segoe UI",9,"bold"),bg=self.colors["panel"],fg=self.colors["purple2"]); self.mode_setting_label.pack(anchor="w",padx=14,pady=(5,8)); self._button(mi,"Сменить режим",self.change_mode).pack(fill="x",padx=14,pady=(0,14))
+        music=self._card(wrap,"Громкость музыки",None); music.grid(row=1,column=0,columnspan=2,sticky="nsew",pady=6); mui=music.winfo_children()[0]
+        self.volume_label=tk.Label(mui,text=f"Громкость: {_music_volume}%",font=("Segoe UI",9,"bold"),bg=self.colors["panel"],fg=self.colors["text"]); self.volume_label.pack(anchor="w",padx=14,pady=(5,4))
+        self.volume_scale=tk.Scale(mui,from_=0,to=200,orient=tk.HORIZONTAL,bg=self.colors["panel"],fg=self.colors["purple2"],activebackground=self.colors["purple2"],troughcolor=self.colors["chip"],highlightthickness=0,bd=0,showvalue=False,sliderrelief="flat",command=self.on_volume_change); self.volume_scale.pack(fill="x",padx=14,pady=(0,14)); self.volume_scale.set(_music_volume)
+        access=self._card(wrap,"Ключ доступа",None); access.grid(row=2,column=0,columnspan=2,sticky="nsew",pady=6); ac=access.winfo_children()[0]
+        ar=tk.Frame(ac,bg=self.colors["panel"]); ar.pack(fill="x",padx=14,pady=(5,14)); self.settings_key_label=tk.Label(ar,text="",font=("Segoe UI",8),bg=self.colors["panel"],fg=self.colors["text"]); self.settings_key_label.pack(side="left"); self._button(ar,"Сменить ключ",self.change_key).pack(side="right")
 
     def switch_tab(self, idx):
-        self.current_tab = idx
-        for i, (row, icon, label) in enumerate(self.nav_items):
-            active = i == idx
-            bg = "#0a2b39" if active else self.colors["panel"]
-            fg = self.colors["primary2"] if active else self.colors["muted"]
-            row.config(bg=bg)
-            icon.config(bg=bg, fg=self.colors["primary2"] if active else self.colors["muted"])
-            label.config(bg=bg, fg=fg)
-        for p in self.pages.values():
-            p.pack_forget()
-        self.pages[idx].pack(fill="both", expand=True)
+        self.current_tab=idx
+        for i,(row,icon,label,marker) in enumerate(self.nav_items):
+            target=[0,1,2,2,2,1,3,3][i]
+            active=target==idx
+            bg=self.colors["active"] if active else self.colors["sidebar"]
+            row.config(bg=bg); icon.config(bg=bg,fg=self.colors["purple2"] if active else self.colors["muted"]); label.config(bg=bg,fg=self.colors["text"] if active else self.colors["muted"]); marker.config(bg=self.colors["purple2"] if active else bg)
+        for p in self.pages.values(): p.pack_forget()
+        self.pages[idx].pack(fill="both",expand=True)
+
 
     # -------------------- core animation --------------------
 
@@ -1864,11 +3482,11 @@ class MisideInterface:
     def _build_core_art(self, w, h):
         c = self.core_canvas
         self.aura = []
-        for r, col in [(150,"#062332"),(125,"#07364a"),(102,"#084b64"),(83,"#096782")]:
+        for r, col in [(150,"#1a102b"),(125,"#25163b"),(102,"#342052"),(83,"#4b2c78")]:
             self.aura.append(c.create_oval(self.cx-r,self.cy-r,self.cx+r,self.cy+r,
                                            outline=col, width=1))
         self.core_outer = c.create_oval(self.cx-66,self.cy-66,self.cx+66,self.cy+66,
-                                        fill="#03131d", outline=self.colors["primary"], width=2)
+                                        fill="#100d1a", outline=self.colors["primary"], width=2)
         self.core_inner = c.create_oval(self.cx-51,self.cy-51,self.cx+51,self.cy+51,
                                         fill="#062534", outline=self.colors["purple"], width=1)
         self.heart = self.create_heart(self.cx, self.cy, 40, self.colors["primary"])
@@ -2012,6 +3630,53 @@ class MisideInterface:
             self.ram_value.config(text=f"{self.get_ram_usage()} MB")
         if hasattr(self,"header_clock"):
             self.header_clock.config(text=datetime.now().strftime("%H:%M:%S  •  %d.%m.%Y"))
+        if hasattr(self,"neo_clock"):
+            self.neo_clock.config(text=datetime.now().strftime("%H:%M"))
+        if hasattr(self,"neo_mode"):
+            self.neo_mode.config(text=get_mode_name(_mita_mode))
+
+        # NEO voice waveform
+        self._neo_wave_phase += .22
+        if hasattr(self,"voice_wave_canvas"):
+            try:
+                wh=max(32,self.voice_wave_canvas.winfo_height())
+                for i,bar in enumerate(self.voice_wave_bars):
+                    if self.is_listening:
+                        amp=5+abs(math.sin(self._neo_wave_phase+i*.43))*16+random.random()*7
+                        col=self.colors["purple2"]
+                    elif self.is_processing:
+                        amp=4+abs(math.sin(self._neo_wave_phase*.7+i*.31))*10
+                        col=self.colors["purple"]
+                    else:
+                        amp=2+abs(math.sin(self._neo_wave_phase*.35+i*.28))*3
+                        col=self.colors["line2"]
+                    x=5+i*15; cy=wh/2
+                    self.voice_wave_canvas.coords(bar,x,cy-amp/2,x+7,cy+amp/2)
+                    self.voice_wave_canvas.itemconfig(bar,fill=col)
+            except Exception: pass
+
+        # Animated music equalizer + smooth progress line
+        self._neo_player_phase += .18
+        if hasattr(self,"player_vis_canvas"):
+            try:
+                vh=max(42,self.player_vis_canvas.winfo_height())
+                active=self.music_mode or is_music_playing()
+                for i,bar in enumerate(self.player_vis_bars):
+                    amp=(7+abs(math.sin(self._neo_player_phase+i*.52))*30*max(.35,_music_intensity)) if active else (3+abs(math.sin(self._neo_player_phase*.25+i*.4))*3)
+                    x=4+i*14
+                    self.player_vis_canvas.coords(bar,x,vh/2-amp/2,x+7,vh/2+amp/2)
+                    self.player_vis_canvas.itemconfig(bar,fill=self.colors["purple2"] if active else self.colors["line2"])
+            except Exception: pass
+        if hasattr(self,"player_progress_canvas"):
+            try:
+                pw=max(10,self.player_progress_canvas.winfo_width())
+                self.player_progress_canvas.coords(self.player_progress_bg,0,2,pw,6)
+                self.player_progress_canvas.coords(self.player_progress_fg,0,2,max(1,pw*self.music_progress),6)
+            except Exception: pass
+        if hasattr(self,"neo_info_values"):
+            for lab,getter in self.neo_info_values:
+                try: lab.config(text=getter())
+                except Exception: pass
 
         self.root.after(35,self.animate)
 
@@ -2062,6 +3727,959 @@ class MisideInterface:
             if s["x"]<0 or s["x"]>self.W: s["sx"]*=-1
             if s["y"]<80 or s["y"]>self.H: s["sy"]*=-1
 
+
+    # ============================================================
+    # UNIQUE UI / UX FEATURES
+    # ============================================================
+
+    def setup_unique_features(self):
+        """Подключает дополнительные визуальные эффекты и desktop-функции."""
+        self.root.bind_all("<Control-k>", lambda e: self.open_command_palette())
+        self.root.bind_all("<Control-K>", lambda e: self.open_command_palette())
+        self.root.bind_all("<F11>", lambda e: self.toggle_fullscreen())
+        self.root.bind_all("<F10>", lambda e: self.toggle_focus_mode())
+        self.root.bind_all("<F6>", lambda e: self.cycle_accent_theme())
+        self.root.bind_all("<Control-Shift-S>", lambda e: self.quick_screenshot())
+        self.root.bind_all("<Control-Shift-V>", lambda e: self.show_clipboard_history())
+        self.root.bind_all("<Control-n>", lambda e: self.open_notes())
+        self.root.bind_all("<Control-N>", lambda e: self.open_notes())
+        self.root.bind_all("<Control-Shift-P>", lambda e: self.open_telemetry_center())
+        self.root.bind_all("<Alt-m>", lambda e: self.toggle_manual_record())
+        self.root.bind_all("<Alt-M>", lambda e: self.toggle_manual_record())
+        self.root.bind_all("<Escape>", self._escape_overlay)
+        self.root.bind("<Motion>", self._track_mouse)
+        self.root.bind_all("<Button-1>", self._spawn_click_ripple, add="+")
+        self.root.bind_all("<Control-Shift-W>", lambda e: self.refresh_weather_widget(force=True))
+        self.root.bind_all("<F7>", lambda e: self.toggle_cinematic_fx())
+
+        self._build_command_registry()
+        self._build_floating_dock()
+        self._build_corner_hud()
+        self._build_fx_layer()
+        self._build_cinematic_fx_layer()
+        self._load_clipboard_history()
+        self._start_clipboard_watcher()
+        self._start_telemetry_loop()
+        self._animate_extra_fx()
+        self.root.after(1400, lambda: self.refresh_weather_widget(force=False, silent=True))
+        self.root.after(600000, self._schedule_weather_refresh)
+
+        self.root.after(700, lambda: self.show_toast(
+            "MITA NEO 4.0", "Интерфейс загружен • Ctrl+K — командная палитра", "success", 2800
+        ))
+
+    def _build_command_registry(self):
+        self.palette_commands = [
+            ("Главная", "Перейти на главную страницу", "⌂", lambda: self.switch_tab(0)),
+            ("Чат с Mita", "Открыть AI-чат", "◯", lambda: self.switch_tab(1)),
+            ("Команды", "Открыть список голосовых команд", "⌘", lambda: self.switch_tab(2)),
+            ("Настройки", "Открыть параметры Mita", "⚙", lambda: self.switch_tab(3)),
+            ("Начать запись", "Ручное голосовое распознавание", "🎙", self.toggle_manual_record),
+            ("Сделать скриншот", "Сохранить снимок экрана", "▣", self.quick_screenshot),
+            ("Погода рядом", "Автоматически определить", "☁", lambda: self.refresh_weather_widget(force=True, speak_result=True)),
+            ("Заметки", "Быстрый блокнот Mita", "✎", self.open_notes),
+            ("Буфер обмена", "История последних скопированных фрагментов", "▤", self.show_clipboard_history),
+            ("Телеметрия", "CPU / RAM / диск / сеть в реальном времени", "⌁", self.open_telemetry_center),
+            ("Фокус-режим", "Скрыть боковые панели и оставить главное", "◈", self.toggle_focus_mode),
+            ("Полный экран", "Переключить fullscreen", "□", self.toggle_fullscreen),
+            ("Поверх окон", "Закрепить Mita поверх остальных окон", "◆", self.toggle_always_on_top),
+            ("Сменить тему", "Следующий неоновый accent preset", "✦", self.cycle_accent_theme),
+            ("Эффекты", "Включить/выключить анимации", "✧", self.toggle_effects),
+            ("Уменьшить движение", "Мягкий режим анимаций", "≈", self.toggle_reduce_motion),
+            ("Таймер 25 минут", "Запустить фокус-таймер", "◷", lambda: self.start_focus_timer(25)),
+            ("Таймер 5 минут", "Запустить короткий таймер", "◷", lambda: self.start_focus_timer(5)),
+            ("Остановить таймер", "Сбросить активный focus timer", "×", self.stop_focus_timer),
+            ("Остановить музыку", "Немедленно остановить воспроизведение", "■", self.stop_music_click),
+            ("Сменить режим AI", "System / AI / All", "◇", self.change_mode),
+            ("Переключить голос", "Включить или отключить TTS", "♩", self.toggle_tts_mute),
+            ("Исправитель текста", "Включить или отключить корректор", "Aa", self.toggle_corrector),
+            ("Очистить чат", "Удалить локальную историю текущего чата", "⌫", self.clear_chat),
+        ]
+
+    def _build_floating_dock(self):
+        self.floating_dock = tk.Frame(
+            self.root, bg=self.colors["panel2"],
+            highlightbackground=self.colors["line2"], highlightthickness=1
+        )
+        self.floating_dock.place(relx=.5, rely=1, y=-74, anchor="s")
+        dock_items = [
+            ("⌂", "Главная", lambda: self.switch_tab(0)),
+            ("⌘", "Палитра", self.open_command_palette),
+            ("🎙", "Микрофон", self.toggle_manual_record),
+            ("✎", "Заметки", self.open_notes),
+            ("⌁", "Система", self.open_telemetry_center),
+        ]
+        self.dock_buttons = []
+        for icon, tip, cmd in dock_items:
+            b = tk.Label(
+                self.floating_dock, text=icon, font=("Segoe UI Symbol", 12, "bold"),
+                bg=self.colors["panel2"], fg=self.colors["muted"], cursor="hand2",
+                width=3, pady=6
+            )
+            b.pack(side="left", padx=2, pady=2)
+            b.bind("<Button-1>", lambda e, c=cmd: c())
+            b.bind("<Enter>", lambda e, w=b, t=tip: self._dock_hover(w, True, t))
+            b.bind("<Leave>", lambda e, w=b: self._dock_hover(w, False, ""))
+            self.dock_buttons.append(b)
+
+        self.dock_hint = tk.Label(
+            self.root, text="", font=("Segoe UI", 7, "bold"),
+            bg=self.colors["chip"], fg=self.colors["text"], padx=8, pady=3
+        )
+
+    def _dock_hover(self, widget, active, text):
+        widget.config(
+            bg=self.colors["active"] if active else self.colors["panel2"],
+            fg=self.colors["purple2"] if active else self.colors["muted"]
+        )
+        if active:
+            try:
+                x = widget.winfo_rootx() - self.root.winfo_rootx() + widget.winfo_width() // 2
+                y = self.root.winfo_height() - 107
+                self.dock_hint.config(text=text)
+                self.dock_hint.place(x=x, y=y, anchor="s")
+                self.dock_hint.lift()
+            except Exception:
+                pass
+        else:
+            self.dock_hint.place_forget()
+
+    def _build_corner_hud(self):
+        self.corner_hud = tk.Frame(self.root, bg=self.colors["topbar"])
+        self.corner_hud.place(relx=1, rely=1, x=-14, y=-15, anchor="se")
+        self.timer_hud = tk.Label(
+            self.corner_hud, text="", font=("Segoe UI", 7, "bold"),
+            bg=self.colors["topbar"], fg=self.colors["purple2"]
+        )
+        self.timer_hud.pack(side="left", padx=(0, 10))
+        self.net_hud = tk.Label(
+            self.corner_hud, text="NET 0.0 Mbps", font=("Consolas", 7, "bold"),
+            bg=self.colors["topbar"], fg=self.colors["muted"]
+        )
+        self.net_hud.pack(side="left")
+
+    def _build_fx_layer(self):
+        """Лёгкая декоративная сетка/частицы только в свободных областях окна."""
+        self.fx_canvas = tk.Canvas(
+            self.header, bg=self.colors["topbar"], highlightthickness=0,
+            bd=0, width=170, height=56
+        )
+        self.fx_canvas.place(relx=.72, y=1, width=170, height=54)
+        self.fx_dots = []
+        for _ in range(18):
+            x = random.randint(4, 166)
+            y = random.randint(5, 49)
+            r = random.choice((1, 1, 1, 2))
+            obj = self.fx_canvas.create_oval(x-r, y-r, x+r, y+r, fill=self.colors["line2"], outline="")
+            self.fx_dots.append({
+                "id": obj, "x": float(x), "y": float(y),
+                "speed": random.uniform(.15, .55), "phase": random.random() * math.tau
+            })
+
+    def _build_cinematic_fx_layer(self):
+        """Дополнительный cinematic FX-слой: aurora, trail, meteor particles и ripples."""
+        self.cinematic_canvas = tk.Canvas(
+            self.bottom_bar, bg=self.colors["topbar"], highlightthickness=0, bd=0,
+            width=380, height=52
+        )
+        self.cinematic_canvas.place(relx=.5, rely=.5, anchor="center", width=390, height=48)
+        self.cinematic_canvas.tk.call('lower', self.cinematic_canvas._w)
+        self._aurora_lines = []
+        for i in range(7):
+            obj = self.cinematic_canvas.create_line(0,24,390,24,fill=self.colors["line2"],width=1,smooth=True)
+            self._aurora_lines.append(obj)
+
+        # Маленькие «метеоры» в шапке.
+        if hasattr(self, "fx_canvas"):
+            for _ in range(4):
+                x = random.uniform(30, 220)
+                y = random.uniform(2, 35)
+                length = random.uniform(10, 26)
+                item = self.fx_canvas.create_line(x,y,x+length,y-4,fill=self.colors["line2"],width=1)
+                self._shooting_stars.append({"id":item,"x":x,"y":y,"vx":random.uniform(-1.7,-.7),"vy":random.uniform(.08,.22),"life":random.uniform(0,1)})
+
+    def _spawn_click_ripple(self, event):
+        if not self._effects_enabled or self._reduce_motion:
+            return
+        try:
+            # Рисуем ripple только если клик был в основном окне, а не в popup.
+            if event.widget.winfo_toplevel() is not self.root:
+                return
+            x = event.x_root - self.root.winfo_rootx()
+            y = event.y_root - self.root.winfo_rooty()
+            item = self.canvas.create_oval(x-2,y-2,x+2,y+2,outline=self.colors["purple2"],width=2)
+            self._ripple_items.append({"id":item,"x":x,"y":y,"r":2.0,"life":1.0})
+            self.canvas.tag_raise(item)
+        except Exception:
+            pass
+
+    def _animate_cinematic_fx(self):
+        self._fx_frame += 1
+        self._aurora_phase += .045 if not self._reduce_motion else .012
+        target_energy = .85 if (self.is_listening or self.is_processing or self.is_manual_recording) else (.7 if self.music_mode else .18)
+        self._ambient_energy += (target_energy - self._ambient_energy) * .06
+
+        # Aurora waveform в нижней панели.
+        if hasattr(self, "cinematic_canvas"):
+            w = max(100, self.cinematic_canvas.winfo_width())
+            h = max(20, self.cinematic_canvas.winfo_height())
+            for layer, item in enumerate(self._aurora_lines):
+                pts = []
+                amp = (2.0 + layer * .8) * (1 + self._ambient_energy * 2.7)
+                for x in range(0, int(w)+12, 12):
+                    y = h/2 + math.sin(x*.028 + self._aurora_phase*(1.0+layer*.08) + layer*.8)*amp
+                    y += math.sin(x*.071 - self._aurora_phase*.6 + layer)*amp*.24
+                    pts.extend((x,y))
+                try:
+                    self.cinematic_canvas.coords(item,*pts)
+                    self.cinematic_canvas.itemconfig(item,fill=self.colors["purple2"] if layer in (2,3,4) else self.colors["line2"],width=1 if layer not in (3,) else 2)
+                except Exception:
+                    pass
+
+        # Ripples плавно расширяются и исчезают.
+        kept=[]
+        for rp in self._ripple_items:
+            rp["r"] += 2.5 + self._ambient_energy*1.2
+            rp["life"] -= .045
+            if rp["life"] <= 0:
+                try:self.canvas.delete(rp["id"])
+                except Exception:pass
+                continue
+            r=rp["r"]
+            try:
+                self.canvas.coords(rp["id"],rp["x"]-r,rp["y"]-r,rp["x"]+r,rp["y"]+r)
+                self.canvas.itemconfig(rp["id"],width=max(1,int(rp["life"]*2)))
+            except Exception:
+                pass
+            kept.append(rp)
+        self._ripple_items=kept[-12:]
+
+        # Метеоры.
+        if hasattr(self,"fx_canvas"):
+            fw=max(50,self.fx_canvas.winfo_width()); fh=max(30,self.fx_canvas.winfo_height())
+            for st in self._shooting_stars:
+                st["x"] += st["vx"] * (1.0 + self._ambient_energy*.7)
+                st["y"] += st["vy"]
+                st["life"] -= .008
+                if st["x"] < -30 or st["y"] > fh+10 or st["life"] <= 0:
+                    st["x"] = fw + random.uniform(10,90); st["y"] = random.uniform(1,22)
+                    st["life"] = random.uniform(.55,1.2); st["vx"] = random.uniform(-1.8,-.8)
+                try:
+                    self.fx_canvas.coords(st["id"],st["x"],st["y"],st["x"]+18,st["y"]-4)
+                    self.fx_canvas.itemconfig(st["id"],fill=self.colors["purple2"] if self._ambient_energy>.45 else self.colors["line2"])
+                except Exception:
+                    pass
+
+    def toggle_cinematic_fx(self):
+        self._effects_enabled = not self._effects_enabled
+        self.show_toast("Cinematic FX", "Эффекты включены" if self._effects_enabled else "Эффекты выключены", "success" if self._effects_enabled else "warning", 1800)
+
+    def refresh_weather_widget(self, force=False, silent=False, speak_result=False):
+        if self._weather_loading:
+            return
+        self._weather_loading = True
+        if hasattr(self,"weather_main_label"):
+            self.weather_main_label.config(text="Определяю город и получаю погоду…",fg=self.colors["purple2"])
+        if hasattr(self,"weather_sub_label"):
+            self.weather_sub_label.config(text="IP GEO → координаты → Open-Meteo")
+        def worker():
+            result = get_local_weather(force=force, lang=("ua" if UI_LANGUAGE=="ua" else "ru"))
+            self.root.after(0, lambda r=result: self._apply_weather_result(r, silent=silent, speak_result=speak_result))
+        threading.Thread(target=worker,daemon=True).start()
+
+    def _apply_weather_result(self, result, silent=False, speak_result=False):
+        self._weather_loading = False
+        if not result.get("ok"):
+            msg=result.get("error") or "Ошибка погоды"
+            if hasattr(self,"weather_main_label"): self.weather_main_label.config(text=msg,fg="#ff8a9e")
+            if hasattr(self,"weather_sub_label"): self.weather_sub_label.config(text=result.get("details","")[:120])
+            if not silent:self.show_toast("Погода",msg,"danger")
+            return
+        loc=result["location"]; data=result["weather"]; cur=data.get("current") or {}
+        desc, icon=_weather_code_info(cur.get("weather_code"), "ua" if UI_LANGUAGE=="ua" else "ru")
+        city=loc.get("city") or "—"; temp=cur.get("temperature_2m"); hum=cur.get("relative_humidity_2m"); wind=cur.get("wind_speed_10m")
+        try: t=f"{float(temp):.0f}°C"
+        except: t="—°C"
+        if hasattr(self,"weather_main_label"):
+            self.weather_main_label.config(text=f"{icon} {city}  •  {t}  •  {desc}",fg=self.colors["text"])
+        if hasattr(self,"weather_sub_label"):
+            self.weather_sub_label.config(text=f"Влажность {hum}% • ветер {wind} км/ч •")
+        if hasattr(self,"weather_orb_text"):
+            try:self.weather_orb.itemconfig(self.weather_orb_text,text=icon)
+            except Exception:pass
+        if hasattr(self, "weather_updated_label"):
+            try:
+                self.weather_updated_label.config(text=f"ОБНОВЛЕНО • {datetime.now().strftime('%H:%M')}")
+            except Exception:
+                pass
+        if not silent:self.show_toast("Погода обновлена",f"{city}: {t}, {desc}","success",2400)
+        if speak_result:
+            speak(result["report"],force=True)
+
+    def _schedule_weather_refresh(self):
+        if not self.running:
+            return
+        self.refresh_weather_widget(force=True, silent=True)
+        self.root.after(600000, self._schedule_weather_refresh)
+
+    def get_weather_for_chat(self, force=False):
+        result=get_local_weather(force=force,lang=("ua" if UI_LANGUAGE=="ua" else "ru"))
+        try:self.root.after(0,lambda r=result:self._apply_weather_result(r,silent=True,speak_result=False))
+        except Exception:pass
+        if result.get("ok"):return result["report"]
+        return result.get("error") or T("error") + " weather"
+
+    def _track_mouse(self, event):
+        try:
+            self._mouse_x = event.x_root - self.root.winfo_rootx()
+            self._mouse_y = event.y_root - self.root.winfo_rooty()
+        except Exception:
+            pass
+
+    def _animate_extra_fx(self):
+        if not self.running:
+            return
+        self._glow_phase += .055 if not self._reduce_motion else .018
+        self._logo_phase += .07 if not self._reduce_motion else .02
+
+        if hasattr(self, "logo_canvas") and self._effects_enabled:
+            pulse = (math.sin(self._logo_phase) + 1) / 2
+            try:
+                # имитация glow через изменение толщины и размеров колец
+                pad = 2 + pulse * 2
+                self.logo_canvas.coords(self.logo_glow_outer, pad, pad, 34-pad, 34-pad)
+                self.logo_canvas.itemconfig(self.logo_glow_outer, width=1 + int(pulse * 2), outline=self.colors["line2"])
+                self.logo_canvas.itemconfig(self.logo_glow_mid, outline=self.colors["purple2"])
+                self.logo_canvas.itemconfig(self.logo_core, fill=self.colors["purple"])
+            except Exception:
+                pass
+
+        if hasattr(self, "shield_canvas") and self._effects_enabled:
+            try:
+                cx = 48 + math.sin(self._glow_phase * .8) * 2
+                cy = 48 + math.cos(self._glow_phase * .9) * 2
+                self.shield_canvas.coords(5, cx-6, cy-6, cx+6, cy+6)
+            except Exception:
+                pass
+
+        if hasattr(self, "fx_canvas"):
+            w = max(20, self.fx_canvas.winfo_width())
+            for i, dot in enumerate(self.fx_dots):
+                if self._effects_enabled:
+                    dot["x"] -= dot["speed"]
+                    dot["y"] += math.sin(self._glow_phase + dot["phase"]) * .08
+                    if dot["x"] < 0:
+                        dot["x"] = w + random.randint(0, 20)
+                        dot["y"] = random.randint(5, 49)
+                    a = (math.sin(self._glow_phase * 1.3 + dot["phase"]) + 1) / 2
+                    col = self.colors["purple2"] if a > .68 else self.colors["line2"]
+                    self.fx_canvas.itemconfig(dot["id"], fill=col)
+                self.fx_canvas.coords(dot["id"], dot["x"]-1, dot["y"]-1, dot["x"]+1, dot["y"]+1)
+
+        self._animate_cinematic_fx()
+
+        if hasattr(self,"weather_orb") and self._effects_enabled:
+            try:
+                self._weather_icon_phase += .05 if not self._reduce_motion else .015
+                p=(math.sin(self._weather_icon_phase)+1)/2
+                pad=4+p*3
+                self.weather_orb.coords(self.weather_orb_ring,pad,pad,50-pad,50-pad)
+                self.weather_orb.itemconfig(self.weather_orb_ring,width=1+int(p*2),outline=self.colors["purple2"] if p>.55 else self.colors["line2"])
+            except Exception:pass
+
+        self._update_focus_timer_hud()
+        self.root.after(35 if not self._reduce_motion else 85, self._animate_extra_fx)
+
+    # -------------------- Toast system --------------------
+
+    def show_toast(self, title, message, kind="info", duration=3200):
+        palette = {
+            "info": self.colors["purple2"],
+            "success": self.colors["green"],
+            "warning": "#ffbe63",
+            "danger": "#ff6584",
+        }
+        accent = palette.get(kind, self.colors["purple2"])
+        toast = tk.Frame(
+            self.root, bg=self.colors["panel"],
+            highlightbackground=accent, highlightthickness=1
+        )
+        toast.place(relx=1, x=-24, y=76 + len(self.toast_stack) * 82, anchor="ne", width=330, height=70)
+        side = tk.Frame(toast, bg=accent, width=4); side.pack(side="left", fill="y")
+        body = tk.Frame(toast, bg=self.colors["panel"]); body.pack(side="left", fill="both", expand=True, padx=12, pady=8)
+        tk.Label(body, text=title, font=("Segoe UI", 9, "bold"), bg=self.colors["panel"], fg=self.colors["text"]).pack(anchor="w")
+        tk.Label(body, text=message, font=("Segoe UI", 7), bg=self.colors["panel"], fg=self.colors["muted"], wraplength=285, justify="left").pack(anchor="w", pady=(3,0))
+        close = tk.Label(toast, text="×", font=("Segoe UI", 10, "bold"), bg=self.colors["panel"], fg=self.colors["muted"], cursor="hand2")
+        close.place(relx=1, x=-8, y=5, anchor="ne")
+        close.bind("<Button-1>", lambda e, t=toast: self._close_toast(t))
+        self.toast_stack.append(toast)
+        toast.lift()
+        self.root.after(duration, lambda t=toast: self._close_toast(t))
+
+    def _close_toast(self, toast):
+        if toast not in self.toast_stack:
+            return
+        try:
+            toast.destroy()
+        except Exception:
+            pass
+        try:
+            self.toast_stack.remove(toast)
+        except ValueError:
+            pass
+        for i, item in enumerate(self.toast_stack):
+            try:
+                item.place_configure(y=76 + i * 82)
+            except Exception:
+                pass
+
+    # -------------------- Command palette --------------------
+
+    def open_command_palette(self):
+        if self.command_palette is not None:
+            try:
+                self.command_palette.lift(); self.palette_entry.focus_set()
+                return
+            except Exception:
+                self.command_palette = None
+
+        win = tk.Toplevel(self.root)
+        self.command_palette = win
+        win.title("Mita Command Palette")
+        win.geometry("680x560")
+        win.configure(bg=self.colors["bg"])
+        win.transient(self.root)
+        win.attributes("-topmost", True)
+        try: win.attributes("-alpha", .98)
+        except Exception: pass
+        win.protocol("WM_DELETE_WINDOW", self.close_command_palette)
+
+        shell = tk.Frame(win, bg=self.colors["line2"])
+        shell.pack(fill="both", expand=True, padx=1, pady=1)
+        body = tk.Frame(shell, bg=self.colors["panel2"])
+        body.pack(fill="both", expand=True, padx=1, pady=1)
+
+        top = tk.Frame(body, bg=self.colors["panel2"])
+        top.pack(fill="x", padx=18, pady=(18, 10))
+        tk.Label(top, text="⌘", font=("Segoe UI Symbol", 16, "bold"), bg=self.colors["panel2"], fg=self.colors["purple2"]).pack(side="left", padx=(0,10))
+        self.palette_entry = tk.Entry(
+            top, textvariable=self.palette_query, font=("Segoe UI", 12),
+            bg=self.colors["panel"], fg=self.colors["text"], insertbackground=self.colors["purple2"],
+            relief="flat", bd=0
+        )
+        self.palette_entry.pack(side="left", fill="x", expand=True, ipady=10, padx=(0,10))
+        tk.Label(top, text="ESC", font=("Consolas", 7, "bold"), bg=self.colors["chip"], fg=self.colors["muted"], padx=8, pady=5).pack(side="right")
+
+        self.palette_status = tk.Label(body, text="", font=("Segoe UI", 7), bg=self.colors["panel2"], fg=self.colors["muted"])
+        self.palette_status.pack(anchor="w", padx=20)
+
+        self.palette_list = tk.Frame(body, bg=self.colors["panel2"])
+        self.palette_list.pack(fill="both", expand=True, padx=14, pady=(8,14))
+        self.palette_query.set("")
+        self.palette_query.trace_add("write", lambda *_: self._refresh_palette())
+        self.palette_entry.bind("<Return>", lambda e: self._run_palette_first())
+        self.palette_entry.bind("<Down>", lambda e: self._palette_select_delta(1))
+        self.palette_entry.bind("<Up>", lambda e: self._palette_select_delta(-1))
+        self.palette_entry.focus_set()
+        self._palette_selected = 0
+        self._refresh_palette()
+
+    def close_command_palette(self):
+        if self.command_palette is not None:
+            try: self.command_palette.destroy()
+            except Exception: pass
+        self.command_palette = None
+
+    def _palette_score(self, query, title, desc):
+        q = query.lower().strip()
+        if not q:
+            return 100
+        t = title.lower(); d = desc.lower()
+        if q == t: return 1000
+        if t.startswith(q): return 800
+        if q in t: return 650
+        if q in d: return 420
+        words = [w for w in q.split() if w]
+        score = sum(90 for w in words if w in t) + sum(35 for w in words if w in d)
+        return score
+
+    def _refresh_palette(self):
+        if self.command_palette is None:
+            return
+        for child in self.palette_list.winfo_children():
+            child.destroy()
+        q = self.palette_query.get()
+        ranked = []
+        for item in self.palette_commands:
+            score = self._palette_score(q, item[0], item[1])
+            if score > 0:
+                ranked.append((score, item))
+        ranked.sort(key=lambda x: x[0], reverse=True)
+        self._palette_visible = [it for _, it in ranked[:9]]
+        self._palette_selected = min(self._palette_selected, max(0, len(self._palette_visible)-1))
+        self.palette_status.config(text=f"{len(self._palette_visible)} быстрых действий • Enter — выполнить")
+
+        for i, item in enumerate(self._palette_visible):
+            title, desc, icon, cmd = item
+            active = i == self._palette_selected
+            bg = self.colors["active"] if active else self.colors["panel"]
+            row = tk.Frame(self.palette_list, bg=bg, cursor="hand2", highlightthickness=1, highlightbackground=self.colors["line2"] if active else self.colors["panel"])
+            row.pack(fill="x", pady=3, ipady=6)
+            ic = tk.Label(row, text=icon, width=4, font=("Segoe UI Symbol", 11, "bold"), bg=bg, fg=self.colors["purple2"])
+            ic.pack(side="left", padx=(6,4))
+            text = tk.Frame(row, bg=bg); text.pack(side="left", fill="x", expand=True)
+            tk.Label(text, text=title, font=("Segoe UI", 9, "bold"), bg=bg, fg=self.colors["text"]).pack(anchor="w")
+            tk.Label(text, text=desc, font=("Segoe UI", 7), bg=bg, fg=self.colors["muted"]).pack(anchor="w")
+            hot = tk.Label(row, text="RUN", font=("Consolas", 6, "bold"), bg=self.colors["chip"], fg=self.colors["muted"], padx=6, pady=3)
+            hot.pack(side="right", padx=10)
+            for w in (row, ic, text, hot) + tuple(text.winfo_children()):
+                w.bind("<Button-1>", lambda e, c=cmd: self._run_palette_command(c))
+                w.bind("<Enter>", lambda e, r=row: r.config(bg=self.colors["active"]))
+
+    def _palette_select_delta(self, delta):
+        if not getattr(self, "_palette_visible", None):
+            return "break"
+        self._palette_selected = (self._palette_selected + delta) % len(self._palette_visible)
+        self._refresh_palette()
+        return "break"
+
+    def _run_palette_first(self):
+        if not getattr(self, "_palette_visible", None):
+            return
+        idx = max(0, min(self._palette_selected, len(self._palette_visible)-1))
+        self._run_palette_command(self._palette_visible[idx][3])
+
+    def _run_palette_command(self, command):
+        self.close_command_palette()
+        try:
+            command()
+        except Exception as e:
+            self.show_toast("Ошибка", str(e), "danger")
+
+    def _escape_overlay(self, event=None):
+        if self.command_palette is not None:
+            self.close_command_palette(); return "break"
+        if self.fullscreen_mode:
+            self.toggle_fullscreen(); return "break"
+        return None
+
+    # -------------------- Window modes --------------------
+
+    def toggle_fullscreen(self):
+        self.fullscreen_mode = not self.fullscreen_mode
+        try: self.root.attributes("-fullscreen", self.fullscreen_mode)
+        except Exception: pass
+        self.show_toast("Полный экран", "Включён" if self.fullscreen_mode else "Выключен", "info", 1800)
+
+    def toggle_always_on_top(self):
+        self.always_on_top = not self.always_on_top
+        try: self.root.attributes("-topmost", self.always_on_top)
+        except Exception: pass
+        self.show_toast("Поверх окон", "Mita закреплена" if self.always_on_top else "Обычный режим", "success" if self.always_on_top else "info", 1800)
+
+    def toggle_focus_mode(self):
+        self.focus_mode = not self.focus_mode
+        if self.focus_mode:
+            try:
+                self.sidebar.pack_forget()
+                self.rightbar.pack_forget()
+                self.floating_dock.place_forget()
+            except Exception:
+                pass
+            self.show_toast("Focus Mode", "Боковые панели скрыты • F10 для выхода", "success", 2200)
+        else:
+            try:
+                self.sidebar.pack(side="left", fill="y", before=self.content)
+                self.rightbar.pack(side="right", fill="y", padx=(0,12), pady=(12,8), after=self.content)
+                self.floating_dock.place(relx=.5, rely=1, y=-74, anchor="s")
+            except Exception:
+                # надёжный fallback: пересобираем порядок pack без уничтожения виджетов
+                try:
+                    self.sidebar.pack(side="left", fill="y")
+                    self.content.pack(side="left", fill="both", expand=True)
+                    self.rightbar.pack(side="right", fill="y", padx=(0,12), pady=(12,8))
+                except Exception:
+                    pass
+            self.show_toast("Focus Mode", "Обычный интерфейс восстановлен", "info", 1800)
+
+    def toggle_effects(self):
+        self._effects_enabled = not self._effects_enabled
+        self.show_toast("Эффекты", "Анимации включены" if self._effects_enabled else "Анимации отключены", "info", 1800)
+
+    def toggle_reduce_motion(self):
+        self._reduce_motion = not self._reduce_motion
+        self.show_toast("Motion", "Мягкая анимация" if self._reduce_motion else "Полная анимация", "info", 1800)
+
+    # -------------------- Accent themes --------------------
+
+    def cycle_accent_theme(self):
+        self._accent_index = (self._accent_index + 1) % len(self._accent_presets)
+        name, primary, primary2, primary3 = self._accent_presets[self._accent_index]
+        self.colors["primary"] = primary
+        self.colors["purple"] = primary
+        self.colors["primary2"] = primary2
+        self.colors["purple2"] = primary2
+        self.colors["purple3"] = primary3
+        self.colors["line2"] = primary
+        self._apply_accent_recursive(self.root)
+        try:
+            self.logo_canvas.itemconfig(self.logo_glow_mid, outline=primary)
+            self.logo_canvas.itemconfig(self.logo_core, fill=primary2, outline=primary3)
+        except Exception:
+            pass
+        self.show_toast("NEON THEME", f"Акцент: {name}", "success", 2200)
+
+    def _apply_accent_recursive(self, widget):
+        """Аккуратно перекрашивает только явно фиолетовые элементы, не ломая фон."""
+        try:
+            cls = widget.winfo_class()
+            if cls in ("Label", "Button"):
+                fg = widget.cget("fg")
+                old_accents = {"#7c4dff", "#a978ff", "#c7a8ff", self.colors.get("primary"), self.colors.get("primary2")}
+                if fg in old_accents or "purple" in str(fg).lower():
+                    widget.config(fg=self.colors["purple2"])
+            if cls == "Scale":
+                widget.config(activebackground=self.colors["purple2"])
+        except Exception:
+            pass
+        try:
+            for child in widget.winfo_children():
+                self._apply_accent_recursive(child)
+        except Exception:
+            pass
+
+    # -------------------- Screenshot --------------------
+
+    def quick_screenshot(self):
+        try:
+            folder = os.path.join(BASE_DIR, "Screenshots")
+            os.makedirs(folder, exist_ok=True)
+            name = datetime.now().strftime("mita_%Y-%m-%d_%H-%M-%S.png")
+            path = os.path.join(folder, name)
+            pyautogui.screenshot(path)
+            self._add_recent_ui_action("Скриншот", path)
+            self.show_toast("Скриншот сохранён", name, "success")
+        except Exception as e:
+            self.show_toast("Скриншот", f"Не удалось сохранить: {e}", "danger")
+
+    # -------------------- Clipboard history --------------------
+
+    def _clipboard_file(self):
+        return os.path.join(BASE_DIR, "mita_clipboard_history.json")
+
+    def _load_clipboard_history(self):
+        try:
+            path = self._clipboard_file()
+            if os.path.exists(path):
+                data = json.loads(Path(path).read_text(encoding="utf-8"))
+                if isinstance(data, list):
+                    self.clipboard_history = [str(x) for x in data[:30]]
+        except Exception:
+            self.clipboard_history = []
+
+    def _save_clipboard_history(self):
+        try:
+            Path(self._clipboard_file()).write_text(json.dumps(self.clipboard_history[:30], ensure_ascii=False, indent=2), encoding="utf-8")
+        except Exception:
+            pass
+
+    def _start_clipboard_watcher(self):
+        self._poll_clipboard()
+
+    def _poll_clipboard(self):
+        if not self.running:
+            return
+        try:
+            value = self.root.clipboard_get()
+            value = str(value).strip()
+            if value and value != self._last_clipboard_value and len(value) <= 20000:
+                self._last_clipboard_value = value
+                if value in self.clipboard_history:
+                    self.clipboard_history.remove(value)
+                self.clipboard_history.insert(0, value)
+                self.clipboard_history = self.clipboard_history[:30]
+                self._save_clipboard_history()
+        except Exception:
+            pass
+        self.root.after(1200, self._poll_clipboard)
+
+    def show_clipboard_history(self):
+        if self.clipboard_window is not None:
+            try: self.clipboard_window.destroy()
+            except Exception: pass
+        win = tk.Toplevel(self.root); self.clipboard_window = win
+        win.title("Mita Clipboard")
+        win.geometry("620x520")
+        win.configure(bg=self.colors["bg"])
+        win.transient(self.root)
+        win.attributes("-topmost", True)
+        win.protocol("WM_DELETE_WINDOW", lambda: self._close_clipboard_window())
+
+        tk.Label(win, text="БУФЕР ОБМЕНА", font=("Segoe UI", 15, "bold"), bg=self.colors["bg"], fg=self.colors["text"]).pack(anchor="w", padx=22, pady=(20,2))
+        tk.Label(win, text="Нажмите на карточку, чтобы вернуть текст в буфер", font=("Segoe UI", 8), bg=self.colors["bg"], fg=self.colors["muted"]).pack(anchor="w", padx=22, pady=(0,12))
+        outer = tk.Frame(win, bg=self.colors["bg"]); outer.pack(fill="both", expand=True, padx=18, pady=(0,18))
+        canvas = tk.Canvas(outer, bg=self.colors["bg"], highlightthickness=0)
+        scroll = ttk.Scrollbar(outer, orient="vertical", command=canvas.yview)
+        inner = tk.Frame(canvas, bg=self.colors["bg"])
+        inner.bind("<Configure>", lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
+        canvas.create_window((0,0), window=inner, anchor="nw", width=560)
+        canvas.configure(yscrollcommand=scroll.set)
+        canvas.pack(side="left", fill="both", expand=True); scroll.pack(side="right", fill="y")
+
+        if not self.clipboard_history:
+            tk.Label(inner, text="История пока пустая", font=("Segoe UI", 9), bg=self.colors["bg"], fg=self.colors["muted"]).pack(pady=30)
+        for i, text in enumerate(self.clipboard_history[:20]):
+            preview = text.replace("\n", " ↵ ")
+            if len(preview) > 140: preview = preview[:137] + "..."
+            row = tk.Frame(inner, bg=self.colors["panel"], highlightbackground=self.colors["border"], highlightthickness=1, cursor="hand2")
+            row.pack(fill="x", pady=4, padx=2)
+            tk.Label(row, text=f"{i+1:02d}", font=("Consolas", 7, "bold"), bg=self.colors["chip"], fg=self.colors["purple2"], width=4, pady=10).pack(side="left", padx=(7,10), pady=7)
+            label = tk.Label(row, text=preview, font=("Segoe UI", 8), bg=self.colors["panel"], fg=self.colors["text"], justify="left", anchor="w", wraplength=430)
+            label.pack(side="left", fill="x", expand=True, padx=(0,8), pady=8)
+            for w in (row, label):
+                w.bind("<Button-1>", lambda e, v=text: self._restore_clipboard(v))
+
+    def _close_clipboard_window(self):
+        if self.clipboard_window is not None:
+            try: self.clipboard_window.destroy()
+            except Exception: pass
+        self.clipboard_window = None
+
+    def _restore_clipboard(self, text):
+        try:
+            self.root.clipboard_clear(); self.root.clipboard_append(text); self.root.update()
+            self._last_clipboard_value = text
+            self.show_toast("Буфер обмена", "Фрагмент восстановлен", "success", 1600)
+            self._close_clipboard_window()
+        except Exception as e:
+            self.show_toast("Буфер обмена", str(e), "danger")
+
+    # -------------------- Notes --------------------
+
+    def _notes_file(self):
+        return os.path.join(BASE_DIR, "mita_notes.txt")
+
+    def open_notes(self):
+        if self.notes_window is not None:
+            try: self.notes_window.lift(); return
+            except Exception: self.notes_window = None
+        win = tk.Toplevel(self.root); self.notes_window = win
+        win.title("Mita Notes")
+        win.geometry("720x560")
+        win.configure(bg=self.colors["bg"])
+        win.transient(self.root)
+        win.protocol("WM_DELETE_WINDOW", self._close_notes)
+
+        top = tk.Frame(win, bg=self.colors["bg"]); top.pack(fill="x", padx=20, pady=(18,10))
+        tk.Label(top, text="MITA NOTES", font=("Segoe UI", 15, "bold"), bg=self.colors["bg"], fg=self.colors["text"]).pack(side="left")
+        self.notes_status = tk.Label(top, text="AUTO SAVE", font=("Consolas", 7, "bold"), bg=self.colors["chip"], fg=self.colors["green"], padx=8, pady=4)
+        self.notes_status.pack(side="right")
+
+        self.notes_text = tk.Text(
+            win, bg=self.colors["panel"], fg=self.colors["text"],
+            insertbackground=self.colors["purple2"], selectbackground=self.colors["purple"],
+            font=("Segoe UI", 10), wrap="word", bd=0, padx=16, pady=14
+        )
+        self.notes_text.pack(fill="both", expand=True, padx=20, pady=(0,10))
+        try:
+            if os.path.exists(self._notes_file()):
+                self.notes_text.insert("1.0", Path(self._notes_file()).read_text(encoding="utf-8"))
+        except Exception:
+            pass
+        self.notes_text.bind("<KeyRelease>", lambda e: self._schedule_notes_save())
+        bottom = tk.Frame(win, bg=self.colors["bg"]); bottom.pack(fill="x", padx=20, pady=(0,18))
+        self._button(bottom, "СОХРАНИТЬ", self._save_notes_now, accent=True).pack(side="left")
+        self._button(bottom, "ОЧИСТИТЬ", self._clear_notes).pack(side="left", padx=8)
+        self._button(bottom, "ЗАКРЫТЬ", self._close_notes).pack(side="right")
+
+    def _schedule_notes_save(self):
+        try:
+            if hasattr(self, "_notes_after") and self._notes_after:
+                self.root.after_cancel(self._notes_after)
+        except Exception:
+            pass
+        self.notes_status.config(text="EDITING...", fg=self.colors["purple2"])
+        self._notes_after = self.root.after(700, self._save_notes_now)
+
+    def _save_notes_now(self):
+        if self.notes_window is None:
+            return
+        try:
+            text = self.notes_text.get("1.0", "end-1c")
+            Path(self._notes_file()).write_text(text, encoding="utf-8")
+            self.notes_status.config(text="SAVED", fg=self.colors["green"])
+        except Exception as e:
+            self.notes_status.config(text="SAVE ERROR", fg="#ff6584")
+            self.show_toast("Заметки", str(e), "danger")
+
+    def _clear_notes(self):
+        if self.notes_window is None: return
+        self.notes_text.delete("1.0", "end")
+        self._save_notes_now()
+
+    def _close_notes(self):
+        try: self._save_notes_now()
+        except Exception: pass
+        if self.notes_window is not None:
+            try: self.notes_window.destroy()
+            except Exception: pass
+        self.notes_window = None
+
+    # -------------------- Telemetry center --------------------
+
+    def _start_telemetry_loop(self):
+        self._poll_telemetry()
+
+    def _poll_telemetry(self):
+        if not self.running:
+            return
+        try:
+            cpu = float(psutil.cpu_percent(interval=None))
+            ram = float(psutil.virtual_memory().percent)
+            disk = float(psutil.disk_usage(os.path.abspath(os.sep)).percent)
+            for key, val in (("cpu",cpu),("ram",ram),("disk",disk)):
+                self.telemetry_history[key].append(val)
+                self.telemetry_history[key] = self.telemetry_history[key][-70:]
+
+            net = psutil.net_io_counters()
+            total = net.bytes_sent + net.bytes_recv
+            now = time.time()
+            if self._net_last_bytes is not None:
+                dt = max(.1, now - self._net_last_time)
+                self._net_speed_mbps = max(0.0, (total - self._net_last_bytes) * 8 / dt / 1_000_000)
+            self._net_last_bytes = total
+            self._net_last_time = now
+
+            if hasattr(self, "net_hud"):
+                self.net_hud.config(text=f"NET {self._net_speed_mbps:.1f} Mbps")
+            if self.telemetry_window is not None:
+                self._draw_telemetry_graphs(cpu, ram, disk)
+        except Exception:
+            pass
+        self.root.after(1000, self._poll_telemetry)
+
+    def open_telemetry_center(self):
+        if self.telemetry_window is not None:
+            try: self.telemetry_window.lift(); return
+            except Exception: self.telemetry_window = None
+        win = tk.Toplevel(self.root); self.telemetry_window = win
+        win.title("Mita Live Telemetry")
+        win.geometry("760x560")
+        win.configure(bg=self.colors["bg"])
+        win.transient(self.root)
+        win.protocol("WM_DELETE_WINDOW", self._close_telemetry)
+
+        tk.Label(win, text="LIVE SYSTEM TELEMETRY", font=("Segoe UI", 15, "bold"), bg=self.colors["bg"], fg=self.colors["text"]).pack(anchor="w", padx=22, pady=(20,2))
+        self.telemetry_sub = tk.Label(win, text="Обновление каждую секунду", font=("Segoe UI", 8), bg=self.colors["bg"], fg=self.colors["muted"])
+        self.telemetry_sub.pack(anchor="w", padx=22, pady=(0,12))
+        self.telemetry_cards = tk.Frame(win, bg=self.colors["bg"]); self.telemetry_cards.pack(fill="x", padx=18)
+        self.telemetry_labels = {}
+        for i, key in enumerate(("CPU", "RAM", "DISK")):
+            card = tk.Frame(self.telemetry_cards, bg=self.colors["panel"], highlightbackground=self.colors["border"], highlightthickness=1)
+            card.grid(row=0, column=i, sticky="nsew", padx=4, pady=4); self.telemetry_cards.columnconfigure(i, weight=1)
+            tk.Label(card, text=key, font=("Consolas", 8, "bold"), bg=self.colors["panel"], fg=self.colors["muted"]).pack(anchor="w", padx=12, pady=(10,2))
+            val = tk.Label(card, text="0%", font=("Segoe UI", 20, "bold"), bg=self.colors["panel"], fg=self.colors["purple2"])
+            val.pack(anchor="w", padx=12, pady=(0,10)); self.telemetry_labels[key.lower()] = val
+
+        self.telemetry_graph = tk.Canvas(win, bg=self.colors["panel2"], highlightbackground=self.colors["border"], highlightthickness=1)
+        self.telemetry_graph.pack(fill="both", expand=True, padx=22, pady=14)
+        self.telemetry_graph.bind("<Configure>", lambda e: self._draw_telemetry_graphs())
+
+        bottom = tk.Frame(win, bg=self.colors["bg"]); bottom.pack(fill="x", padx=22, pady=(0,18))
+        self.telemetry_net = tk.Label(bottom, text="Network: 0.0 Mbps", font=("Consolas", 8, "bold"), bg=self.colors["bg"], fg=self.colors["green"])
+        self.telemetry_net.pack(side="left")
+        self._button(bottom, "ЗАКРЫТЬ", self._close_telemetry).pack(side="right")
+        self._draw_telemetry_graphs()
+
+    def _draw_telemetry_graphs(self, cpu=None, ram=None, disk=None):
+        if self.telemetry_window is None or not hasattr(self, "telemetry_graph"):
+            return
+        c = self.telemetry_graph
+        c.delete("all")
+        w = max(200, c.winfo_width()); h = max(180, c.winfo_height())
+        for i in range(1,5):
+            y = h * i / 5
+            c.create_line(0,y,w,y,fill=self.colors["border"],width=1)
+            c.create_text(8,y-8,text=f"{100-i*20}%",anchor="w",fill=self.colors["dim"],font=("Consolas",6))
+        series = [
+            ("cpu", self.colors["purple2"], "CPU"),
+            ("ram", self.colors["green"], "RAM"),
+            ("disk", "#ffb65c", "DISK"),
+        ]
+        for key, color, label in series:
+            vals = self.telemetry_history.get(key, [])
+            if len(vals) >= 2:
+                pts=[]
+                for i,v in enumerate(vals):
+                    x = i * (w-20) / max(1, len(vals)-1) + 10
+                    y = h - 10 - (max(0,min(100,v))/100)*(h-30)
+                    pts.extend((x,y))
+                c.create_line(*pts, fill=color, width=2, smooth=True)
+        c.create_text(w-145, 12, text="● CPU", fill=self.colors["purple2"], font=("Consolas",7,"bold"))
+        c.create_text(w-90, 12, text="● RAM", fill=self.colors["green"], font=("Consolas",7,"bold"))
+        c.create_text(w-34, 12, text="● DISK", fill="#ffb65c", font=("Consolas",7,"bold"))
+
+        try:
+            current = {
+                "cpu": self.telemetry_history["cpu"][-1],
+                "ram": self.telemetry_history["ram"][-1],
+                "disk": self.telemetry_history["disk"][-1],
+            }
+            for k,v in current.items(): self.telemetry_labels[k].config(text=f"{v:.0f}%")
+            self.telemetry_net.config(text=f"Network: {self._net_speed_mbps:.2f} Mbps")
+        except Exception:
+            pass
+
+    def _close_telemetry(self):
+        if self.telemetry_window is not None:
+            try: self.telemetry_window.destroy()
+            except Exception: pass
+        self.telemetry_window = None
+
+    # -------------------- Focus timer --------------------
+
+    def start_focus_timer(self, minutes=25):
+        try: minutes = max(1, int(minutes))
+        except Exception: minutes = 25
+        self.focus_timer_end = time.time() + minutes * 60
+        self.focus_timer_running = True
+        self.show_toast("Focus Timer", f"Запущен на {minutes} мин.", "success", 2000)
+
+    def stop_focus_timer(self):
+        self.focus_timer_running = False
+        self.focus_timer_end = None
+        if hasattr(self, "timer_hud"): self.timer_hud.config(text="")
+        self.show_toast("Focus Timer", "Таймер остановлен", "info", 1600)
+
+    def _update_focus_timer_hud(self):
+        if not self.focus_timer_running or not self.focus_timer_end:
+            return
+        left = int(self.focus_timer_end - time.time())
+        if left <= 0:
+            self.focus_timer_running = False; self.focus_timer_end = None
+            if hasattr(self, "timer_hud"): self.timer_hud.config(text="")
+            self.show_toast("Focus Timer", "Время закончилось ✦", "success", 5000)
+            try: self.root.bell()
+            except Exception: pass
+            return
+        mm, ss = divmod(left, 60)
+        if hasattr(self, "timer_hud"):
+            self.timer_hud.config(text=f"FOCUS {mm:02d}:{ss:02d}")
+
+    # -------------------- Recent UI actions --------------------
+
+    def _add_recent_ui_action(self, title, detail=""):
+        item = {"time": datetime.now().strftime("%H:%M:%S"), "title": title, "detail": detail}
+        self.recent_ui_actions.insert(0, item)
+        self.recent_ui_actions = self.recent_ui_actions[:20]
+        try:
+            if hasattr(self, "event_log"):
+                self.event_log.config(state="normal")
+                self.event_log.insert("1.0", f"{item['time']}  {title}\n")
+                self.event_log.config(state="disabled")
+        except Exception:
+            pass
+
     # -------------------- controls --------------------
 
     def toggle_language(self):
@@ -2071,7 +4689,7 @@ class MisideInterface:
         self.refresh_ui()
 
     def refresh_ui(self):
-        self.root.title("MITA // SECURE INTELLIGENCE CONSOLE")
+        self.root.title("Mita — Голосовой ассистент")
         self.mode_button.config(text=T("change_mode"))
         self.manual_record_button.config(text="[ MIC ]  "+T("manual_input_btn"))
         self.tts_mute_button.config(text="[ VOICE ]  "+(T("voice_on") if not self.tts_muted else T("voice_off")))
@@ -2080,9 +4698,13 @@ class MisideInterface:
         self.change_key_btn.config(text=T("change_key"))
         self.music_stop_button.config(text=T("music_stop"))
         self.volume_label.config(text=f"🔊 {T('volume')}: {_music_volume}%")
-        for i,(row,icon,label) in enumerate(self.nav_items):
-            key=[T("nav_main"),T("nav_chat"),T("nav_commands"),T("nav_settings")][i]
-            label.config(text=key)
+        nav_names = [
+            T("nav_main"), "Чат с Mita", "Управление ПК", T("nav_commands"),
+            "Сценарии", "Память", "Плагины", T("nav_settings")
+        ]
+        for i,(row,icon,label,marker) in enumerate(self.nav_items):
+            if i < len(nav_names):
+                label.config(text=nav_names[i])
         self.update_mode_display()
         self.update_key_info()
         self.add_chat_message("Мита",T("lang_changed"),is_mita=True)
@@ -2217,10 +4839,20 @@ class MisideInterface:
         self.is_processing=True
         try:
             result=None
+
+            # Ручной голосовой ввод тоже AI-FIRST.
+            if _mita_mode in [MODE_AI,MODE_ALL]:
+                try:
+                    if process_smart_ai_command(text,self):
+                        self._reset_manual_state(); return
+                except Exception as e:
+                    print(f"[Mita Brain] Manual AI-FIRST error: {e}")
+
             if _mita_mode in [MODE_SYSTEM,MODE_ALL]:
                 result=self.process_chat_system_command(text)
                 if result:
                     self.add_chat_message("Мита",result,is_mita=True); speak(result); self._reset_manual_state(); return
+
             if _mita_mode in [MODE_AI,MODE_ALL]:
                 response=ask_groq_chat(text,self.chat_history)
                 self.add_chat_message("Мита",response,is_mita=True)
@@ -2245,6 +4877,10 @@ class MisideInterface:
                 fg="white" if is_playing else self.colors["text"],
                 state=tk.NORMAL if is_playing else tk.DISABLED
             )
+        if hasattr(self,"neo_music_stop"):
+            self.neo_music_stop.config(state=tk.NORMAL if is_playing else tk.DISABLED)
+        if not is_playing:
+            self.clear_now_playing()
 
     def stop_music_click(self):
         stop_music()
@@ -2258,7 +4894,89 @@ class MisideInterface:
     def update_volume_display(self):
         if hasattr(self,"volume_scale"): self.volume_scale.set(_music_volume)
         if hasattr(self,"volume_label"): self.volume_label.config(text=f"🔊 {T('volume')}: {_music_volume}%")
-        if self.music_mode: self.status_text.config(text=f"♫  МУЗЫКА ИГРАЕТ  •  {_music_volume}%")
+        if hasattr(self,"neo_volume_label"): self.neo_volume_label.config(text=f"{_music_volume}%")
+        if hasattr(self,"player_meta") and self.now_playing_title:
+            self.player_meta.config(text=f"VLC STREAM  •  {_music_volume}%  •  LIVE AUDIO")
+        if self.music_mode and hasattr(self,"status_text"): self.status_text.config(text=f"♫  МУЗЫКА ИГРАЕТ  •  {_music_volume}%")
+
+    # -------------------- NEO live UI --------------------
+
+    def _ui(self, fn):
+        """Safely execute UI work from voice/music worker threads."""
+        try:
+            self.root.after(0, fn)
+        except Exception:
+            pass
+
+    def show_live_speech(self, text, partial=False):
+        value = str(text or "").strip()
+        if not value:
+            return
+        def apply():
+            self.live_voice_text = value
+            self.live_voice_partial = bool(partial)
+            self.live_voice_updated = time.time()
+            if hasattr(self, "live_voice_label"):
+                self.live_voice_label.config(text=value, fg=self.colors["text"])
+            if hasattr(self, "live_voice_badge"):
+                self.live_voice_badge.config(
+                    text="●  СЛЫШУ ВАС..." if partial else "●  РАСПОЗНАНО",
+                    fg=self.colors["purple2"] if partial else self.colors["green"]
+                )
+            if hasattr(self, "event_log") and not partial:
+                try:
+                    self.event_log.config(state="normal")
+                    self.event_log.insert("end", f"🎙 {value[:90]}\n")
+                    self.event_log.see("end")
+                    self.event_log.config(state="disabled")
+                except Exception:
+                    pass
+        self._ui(apply)
+
+    def set_now_playing(self, title):
+        value = str(title or "Музыка").strip()
+        def apply():
+            self.now_playing_title = value
+            self.music_progress = 0.0
+            if hasattr(self, "player_title"):
+                self.player_title.config(text=value)
+            if hasattr(self, "player_state"):
+                self.player_state.config(text="PLAYING", fg=self.colors["green"])
+            if hasattr(self, "player_meta"):
+                self.player_meta.config(text=f"VLC STREAM  •  {_music_volume}%  •  LIVE AUDIO")
+            if hasattr(self, "neo_music_stop"):
+                self.neo_music_stop.config(state=tk.NORMAL)
+            self.show_toast("NOW PLAYING", value[:60], "success", 2200)
+        self._ui(apply)
+
+    def clear_now_playing(self):
+        def apply():
+            self.now_playing_title = ""
+            self.music_progress = 0.0
+            self.music_elapsed = 0
+            self.music_duration = 0
+            if hasattr(self, "player_title"):
+                self.player_title.config(text="Музыка не запущена")
+            if hasattr(self, "player_state"):
+                self.player_state.config(text="IDLE", fg=self.colors["muted"])
+            if hasattr(self, "player_meta"):
+                self.player_meta.config(text="Скажи: «Стелла, включи песню ...»")
+            if hasattr(self, "player_time"):
+                self.player_time.config(text="00:00")
+            if hasattr(self, "player_duration_label"):
+                self.player_duration_label.config(text="--:--")
+        self._ui(apply)
+
+    def update_music_progress(self, elapsed_ms, duration_ms):
+        def fmt(ms):
+            sec=max(0,int(ms)//1000); return f"{sec//60:02d}:{sec%60:02d}"
+        def apply():
+            self.music_elapsed=max(0,int(elapsed_ms or 0))
+            self.music_duration=max(0,int(duration_ms or 0))
+            self.music_progress=(self.music_elapsed/self.music_duration) if self.music_duration>0 else 0.0
+            if hasattr(self,"player_time"): self.player_time.config(text=fmt(self.music_elapsed))
+            if hasattr(self,"player_duration_label"): self.player_duration_label.config(text=fmt(self.music_duration) if self.music_duration>0 else "--:--")
+        self._ui(apply)
 
     # -------------------- chat helpers --------------------
 
@@ -2345,16 +5063,25 @@ class MisideInterface:
     def process_chat_command(self,message):
         try:
             result=None
+
+            # Текстовый чат ведёт себя так же, как голос: сначала ИИ понимает намерение.
+            if _mita_mode in [MODE_AI,MODE_ALL]:
+                try:
+                    if process_smart_ai_command(message,self):
+                        self.is_processing=False; return
+                except Exception as e:
+                    print(f"[Mita Brain] Chat AI-FIRST error: {e}")
+
             if _mita_mode in [MODE_SYSTEM,MODE_ALL]:
                 result=self.process_chat_system_command(message)
-                if result and _mita_mode==MODE_SYSTEM:
+                if result:
                     self.root.after(0,lambda:self.add_chat_message("Мита",result,is_mita=True))
                     speak(result); self.is_processing=False; return
+
             if _mita_mode in [MODE_AI,MODE_ALL]:
-                if _mita_mode==MODE_AI or not result:
-                    response=ask_groq_chat(message,self.chat_history)
-                    self.root.after(0,lambda:self.add_chat_message("Мита",response,is_mita=True))
-                    self.chat_history.append({"role":"assistant","content":response}); speak(response)
+                response=ask_groq_chat(message,self.chat_history)
+                self.root.after(0,lambda:self.add_chat_message("Мита",response,is_mita=True))
+                self.chat_history.append({"role":"assistant","content":response}); speak(response)
             elif not result:
                 self.root.after(0,lambda:self.add_chat_message("Мита",T("command_not_found"),is_mita=True))
                 speak(T("command_not_found"))
@@ -2364,6 +5091,8 @@ class MisideInterface:
 
     def process_chat_system_command(self,text):
         cleaned=text.lower().strip()
+        if is_weather_request(cleaned):
+            return self.get_weather_for_chat(force=False)
         if process_music_command(cleaned,self): return "🎵 "+T("processing_sub")
         if "громкость" in cleaned or "гучн" in cleaned: return T("volume_text").format(_music_volume)
         stop_phrases=["хватит","стоп","прекрати","замолчи","перестань","остановись","тихо","досить","припини","замовкни","зупинись"]
@@ -2384,8 +5113,9 @@ class MisideInterface:
             if verb in cleaned:
                 target=cleaned.split(verb,1)[1].strip()
                 if target:
-                    if _text_corrector_enabled: target=correct_text(target)
-                    keyboard.write(target,delay=.02); return T("typing_corrected") if _text_corrector_enabled else T("typed")+target
+                    target = prepare_text_for_typing(target)
+                    type_unicode_text(target)
+                    return T("typing_corrected") if _text_corrector_enabled else T("typed") + target
         move_verbs=["переведи","перемести","перекинь","отправь","перемісти","відправ"]
         for verb in move_verbs:
             if verb in cleaned:
@@ -2399,7 +5129,8 @@ class MisideInterface:
         for verb in app_verbs:
             if verb in cleaned:
                 target=cleaned.replace(verb,"").strip()
-                return T("app_launching").format(target) if launch_application(target) else T("app_not_found").format(target)
+                ok, matched = smart_launch_application(target)
+                return T("app_launching").format(matched or target) if ok else T("app_not_found").format(target)
         web_verbs=["открой","открыть","перейди","перейти","покажи","відкрий","відкрити"]
         for verb in web_verbs:
             if verb in cleaned:
@@ -2445,6 +5176,16 @@ class MisideInterface:
 
     def set_listening(self,listening):
         self.is_listening=bool(listening)
+        def apply():
+            if hasattr(self,"live_voice_badge"):
+                self.live_voice_badge.config(
+                    text="●  СЛУШАЮ..." if self.is_listening else "●  МИКРОФОН ГОТОВ",
+                    fg=self.colors["purple2"] if self.is_listening else self.colors["green"]
+                )
+            if self.is_listening and hasattr(self,"live_voice_label"):
+                if time.time()-self.live_voice_updated > 1.0:
+                    self.live_voice_label.config(text="Слушаю тебя...", fg=self.colors["muted"])
+        self._ui(apply)
 
     def set_processing(self,processing):
         self.is_processing=bool(processing)
@@ -2480,6 +5221,12 @@ class MisideInterface:
         try:
             if _vlc_instance is not None:_vlc_instance.release()
         except:pass
+        for child_name in ("command_palette", "notes_window", "telemetry_window", "clipboard_window"):
+            try:
+                child = getattr(self, child_name, None)
+                if child is not None: child.destroy()
+            except Exception:
+                pass
         try:self.root.destroy()
         except:pass
 
@@ -2487,16 +5234,108 @@ class MisideInterface:
         self.root.mainloop()
 
 
+# ============================================================
+# УМНЫЙ VAD / ШУМОПОДАВЛЕНИЕ МИКРОФОНА
+# Игнорирует постоянный фон (вентилятор/гул), быстрее ловит голос.
+# Не требует дополнительных библиотек.
+# ============================================================
+
+VOICE_MIN_RMS = 0.0040
+VOICE_NOISE_MULTIPLIER = 2.8
+VOICE_START_BLOCKS = 2
+VOICE_END_BLOCKS = 8
+VOICE_PREROLL_BLOCKS = 8
+VOICE_MAX_SECONDS = 18.0
+VOICE_LOW_HZ = 90.0
+VOICE_HIGH_HZ = 3900.0
+VOICE_MIN_BAND_RATIO = 0.50
+VOICE_MIN_CENTROID_HZ = 170.0
+VOICE_NOISE_LEARN_RATE = 0.035
+VOICE_NOISE_FLOOR_INIT = 0.0030
+VOICE_DEBUG = False
+
+
+def _voice_features(samples, sample_rate):
+    """Быстрые признаки речи: RMS + энергия речевого диапазона + спектральный центр."""
+    x = np.asarray(samples, dtype=np.float32)
+    if x.size < 16:
+        return 0.0, 0.0, 0.0
+
+    # Убираем DC и немного подавляем низкочастотный гул вентилятора.
+    x = x - float(np.mean(x))
+    hp = np.empty_like(x)
+    hp[0] = x[0]
+    hp[1:] = x[1:] - 0.965 * x[:-1]
+
+    rms = float(np.sqrt(np.mean(hp * hp) + 1e-12))
+
+    n = min(1024, hp.size)
+    frame = hp[-n:]
+    if n < 64:
+        return rms, 0.0, 0.0
+
+    window = np.hanning(n).astype(np.float32)
+    spec = np.abs(np.fft.rfft(frame * window)) ** 2
+    freqs = np.fft.rfftfreq(n, 1.0 / sample_rate)
+    total = float(np.sum(spec)) + 1e-12
+
+    speech_mask = (freqs >= VOICE_LOW_HZ) & (freqs <= VOICE_HIGH_HZ)
+    speech_energy = float(np.sum(spec[speech_mask]))
+    band_ratio = speech_energy / total
+    centroid = float(np.sum(freqs * spec) / total)
+    return rms, band_ratio, centroid
+
+
 def voice_assistant_thread(interface, recognizer, audio_queue, sample_rate, ENERGY_THRESHOLD, SILENCE_LIMIT):
+    from collections import deque
+
     word_buffer = []
+    pre_roll = deque(maxlen=VOICE_PREROLL_BLOCKS)
     silence_counter = 0
+    speech_counter = 0
     is_speaking = False
+    noise_floor = VOICE_NOISE_FLOOR_INIT
+    preview_counter = 0
+    last_preview_text = ""
+    max_blocks = max(1, int(VOICE_MAX_SECONDS * sample_rate / 480))
+
+    def _finish_phrase():
+        nonlocal word_buffer, silence_counter, speech_counter, is_speaking, preview_counter, last_preview_text
+        interface.set_listening(False)
+
+        if word_buffer:
+            try:
+                full_phrase_audio = np.concatenate(word_buffer).astype(np.float32, copy=False)
+
+                # Срезаем очень тихие хвосты, но не трогаем саму речь.
+                if full_phrase_audio.size >= int(sample_rate * 0.18):
+                    stream = recognizer.create_stream()
+                    stream.accept_waveform(sample_rate, full_phrase_audio)
+                    recognizer.decode_stream(stream)
+                    recognized_text = stream.result.text.strip()
+
+                    if recognized_text:
+                        if VOICE_DEBUG:
+                            print(f"[VOICE] Распознано: {recognized_text}")
+                        interface.show_live_speech(recognized_text, partial=False)
+                        process_command(recognized_text, interface)
+            except Exception as e:
+                print(f"[Ошибка распознавания]: {e}")
+
+        word_buffer = []
+        silence_counter = 0
+        speech_counter = 0
+        is_speaking = False
+        preview_counter = 0
+        last_preview_text = ""
+        pre_roll.clear()
 
     with sd.InputStream(
             samplerate=sample_rate,
             channels=1,
             dtype="float32",
-            blocksize=800,
+            blocksize=480,  # 30 мс вместо 50 мс — быстрее реакция
+            latency="low",
             callback=lambda indata, frames, time, status: audio_queue.put(indata.copy()),
     ):
         while interface.running:
@@ -2505,38 +5344,84 @@ def voice_assistant_thread(interface, recognizer, audio_queue, sample_rate, ENER
             except queue.Empty:
                 continue
 
-            samples = data[:, 0]
-            amplitude = np.max(np.abs(samples))
+            samples = data[:, 0].astype(np.float32, copy=False)
+            pre_roll.append(samples.copy())
 
-            if amplitude > ENERGY_THRESHOLD:
-                is_speaking = True
-                silence_counter = 0
-                word_buffer.append(samples)
-                if not interface.is_listening:
-                    interface.set_listening(True)
-            elif is_speaking:
-                word_buffer.append(samples)
-                silence_counter += 1
+            rms, band_ratio, centroid = _voice_features(samples, sample_rate)
 
-                if silence_counter >= SILENCE_LIMIT:
-                    interface.set_listening(False)
+            # Порог сам подстраивается под комнату. Постоянный вентилятор становится
+            # частью noise_floor и через пару секунд почти перестаёт запускать запись.
+            dynamic_threshold = max(VOICE_MIN_RMS, noise_floor * VOICE_NOISE_MULTIPLIER)
 
-                    if word_buffer:
-                        try:
-                            full_phrase_audio = np.concatenate(word_buffer)
-                            stream = recognizer.create_stream()
-                            stream.accept_waveform(sample_rate, full_phrase_audio)
-                            recognizer.decode_stream(stream)
-                            recognized_text = stream.result.text.strip()
+            voice_shape = (
+                band_ratio >= VOICE_MIN_BAND_RATIO and
+                centroid >= VOICE_MIN_CENTROID_HZ
+            )
+            loud_enough = rms >= dynamic_threshold
+            looks_like_voice = loud_enough and voice_shape
 
-                            if recognized_text:
-                                process_command(recognized_text, interface)
-                        except Exception as e:
-                            print(f"[Ошибка распознавания]: {e}")
+            if not is_speaking:
+                # Учим фон только когда уверены, что пользователь не говорит.
+                if not looks_like_voice:
+                    capped = min(rms, max(noise_floor * 2.0, VOICE_MIN_RMS * 2.0))
+                    noise_floor = (
+                        (1.0 - VOICE_NOISE_LEARN_RATE) * noise_floor +
+                        VOICE_NOISE_LEARN_RATE * capped
+                    )
 
-                    word_buffer = []
+                if looks_like_voice:
+                    speech_counter += 1
+                else:
+                    speech_counter = max(0, speech_counter - 1)
+
+                # Нужны два речевых блока подряд: щелчок/удар/шум не сработает.
+                if speech_counter >= VOICE_START_BLOCKS:
+                    is_speaking = True
                     silence_counter = 0
-                    is_speaking = False
+                    word_buffer = list(pre_roll)
+                    if not interface.is_listening:
+                        interface.set_listening(True)
+                    if VOICE_DEBUG:
+                        print(
+                            f"[VOICE] START rms={rms:.4f} noise={noise_floor:.4f} "
+                            f"thr={dynamic_threshold:.4f} band={band_ratio:.2f} cent={centroid:.0f}"
+                        )
+
+            else:
+                word_buffer.append(samples.copy())
+                preview_counter += 1
+
+                # Live preview approximately every 450 ms. It is visual only and never executes commands.
+                if preview_counter >= 15 and len(word_buffer) >= 12:
+                    preview_counter = 0
+                    try:
+                        preview_audio = np.concatenate(word_buffer).astype(np.float32, copy=False)
+                        if preview_audio.size <= int(sample_rate * 8.0):
+                            pstream = recognizer.create_stream()
+                            pstream.accept_waveform(sample_rate, preview_audio)
+                            recognizer.decode_stream(pstream)
+                            ptxt = pstream.result.text.strip()
+                            if ptxt and ptxt != last_preview_text:
+                                last_preview_text = ptxt
+                                interface.show_live_speech(ptxt, partial=True)
+                    except Exception:
+                        pass
+
+                # Во время фразы порог чуть мягче, чтобы не обрезать тихие слоги.
+                continue_threshold = max(VOICE_MIN_RMS * 0.75, noise_floor * 1.65)
+                still_voice = (
+                    rms >= continue_threshold and
+                    band_ratio >= VOICE_MIN_BAND_RATIO * 0.72
+                )
+
+                if still_voice:
+                    silence_counter = 0
+                else:
+                    silence_counter += 1
+
+                # Быстро отдаём фразу в распознавание после ~240 мс тишины.
+                if silence_counter >= VOICE_END_BLOCKS or len(word_buffer) >= max_blocks:
+                    _finish_phrase()
 
 
 # ============================================================
@@ -2643,14 +5528,14 @@ print(f"✅ Модель загружена из: {MODEL_DIR}")
 recognizer = sherpa_onnx.OfflineRecognizer.from_nemo_ctc(
     model=model_path,
     tokens=tokens_path,
-    num_threads=6,
+    num_threads=max(4, min(10, (os.cpu_count() or 6))),
     debug=False,
 )
 
 sample_rate = 16000
 audio_queue = queue.Queue()
-ENERGY_THRESHOLD = 0.015
-SILENCE_LIMIT = 4
+ENERGY_THRESHOLD = 0.015  # legacy: умный VAD использует динамический порог
+SILENCE_LIMIT = 4       # legacy: завершение фразы теперь ~240 мс
 
 TRIGGER_WORDS = ["мита", "стелла", "кепочка", "стелам", "стеллу", "міта", "стела", "стелі"]
 
@@ -2680,6 +5565,9 @@ APP_TRANSLIT_MAP = {
     "хром": "chrome", "яндекс": "yandex", "спотифай": "spotify",
     "дота": "dota2", "кс": "cs2", "калькулятор": "calc", "блокнот": "notepad",
     "телеграм": "telegram", "спотіфай": "spotify", "калькулятор": "calc", "блокнот": "notepad",
+    "обс": "obs", "о б с": "obs", "обс студио": "obs",
+    "бс": "bluestacks", "блюстакс": "bluestacks", "блустакс": "bluestacks", "blue stacks": "bluestacks",
+    "дс": "discord", "дискордик": "discord", "тг": "telegram", "спотик": "spotify",
 }
 
 APP_EXE_MAP = {
@@ -2688,6 +5576,7 @@ APP_EXE_MAP = {
     "chrome": "chrome.exe", "yandex": "browser.exe",
     "spotify": "Spotify.exe", "dota2": "dota2.exe",
     "геншин": "launcher.exe", "obs": "obs64.exe",
+    "bluestacks": "HD-Player.exe",
     "cs2": "cs2.exe", "calc": "calc.exe", "notepad": "notepad.exe",
 }
 
@@ -3001,6 +5890,17 @@ def process_command(text: str, interface):
     phrase = " ".join(filtered_words).strip()
     ui_lang = UI_LANGUAGE
 
+    # СНАЧАЛА локальная папка приложений. Здесь вообще нет Groq/Steam/Fuzzy по всему ПК.
+    if try_folder_app_voice_command(phrase, interface):
+        interface.set_processing(False)
+        return
+
+    # Если Мита только что спросила «Хотите запустить ...?»,
+    # короткое «да/нет» обрабатывается ДО нового AI-запроса.
+    if _handle_pending_app_confirmation(phrase, interface):
+        interface.set_processing(False)
+        return
+
     stop_tts_phrases_ru = ["хватит", "стоп", "прекрати", "замолчи", "перестань", "остановись", "тихо", "заткнись"]
     stop_tts_phrases_ua = ["досить", "припини", "замовкни", "перестань", "зупинись", "тихо"]
     stop_tts_phrases = stop_tts_phrases_ru + stop_tts_phrases_ua
@@ -3033,47 +5933,67 @@ def process_command(text: str, interface):
             if clean_phrase:
                 if not play_sound("write"):
                     play_sound("ok")
-                if _text_corrector_enabled:
-                    corrected = correct_text(clean_phrase)
-                    if corrected != clean_phrase:
-                        msg = T("typing_corrected_msg").format(clean_phrase, corrected)
-                        interface.add_chat_message("Мита", msg, is_mita=True)
-                        speak(T("corrector_on_text"), force=True)
-                        clean_phrase = corrected
+
+                original_phrase = clean_phrase
+                clean_phrase = prepare_text_for_typing(clean_phrase)
+
+                if clean_phrase != original_phrase:
+                    if _text_corrector_enabled:
+                        msg = T("typing_corrected_msg").format(original_phrase, clean_phrase)
                     else:
-                        interface.add_chat_message("Мита", T("typing_writing").format(clean_phrase), is_mita=True)
+                        target_lang_name = "Українська" if UI_LANGUAGE == "ua" else "Русский"
+                        msg = f"🌍 {target_lang_name}: {clean_phrase}"
+                    interface.add_chat_message("Мита", msg, is_mita=True)
                 else:
-                    interface.add_chat_message("Мита", T("typing_writing").format(clean_phrase), is_mita=True)
+                    interface.add_chat_message(
+                        "Мита",
+                        T("typing_writing").format(clean_phrase),
+                        is_mita=True
+                    )
+
                 time.sleep(0.3)
-                keyboard.write(clean_phrase, delay=0.02)
+                type_unicode_text(clean_phrase)
                 msg = T("typing_corrected") if _text_corrector_enabled else T("typing")
                 interface.add_chat_message("Мита", msg, is_mita=True)
                 interface.set_processing(False)
                 return
 
     system_response = False
-    if _mita_mode in [MODE_SYSTEM, MODE_ALL]:
-        system_response = process_system_command(phrase, interface)
-        if system_response and _mita_mode == MODE_SYSTEM:
+
+    # AI-FIRST: в режимах AI/ALL КАЖДАЯ фраза сначала проходит через ИИ-планировщик.
+    # Он решает: запуск приложения, закрытие, сайт, окно, текст, погода или обычный чат.
+    if _mita_mode in [MODE_AI, MODE_ALL]:
+        try:
+            system_response = process_smart_ai_command(phrase, interface)
+        except Exception as e:
+            print(f"[Mita Brain] Ошибка AI-FIRST команды: {e}")
+
+        if system_response:
             interface.set_processing(False)
             return
 
+    # Локальные правила — резерв и отдельный режим MODE_SYSTEM.
+    if _mita_mode in [MODE_SYSTEM, MODE_ALL] and not system_response:
+        system_response = process_system_command(phrase, interface)
+        if system_response:
+            interface.set_processing(False)
+            return
+
+    # Если ИИ решил, что это обычный разговор, отправляем запрос в разговорную модель.
     if _mita_mode in [MODE_AI, MODE_ALL]:
-        if _mita_mode == MODE_AI or not system_response:
-            print("[Стелла]: Обращаюсь к ИИ...")
-            try:
-                response = ask_groq(phrase)
-                print(f"[Стелла]: {response}")
-                interface.add_chat_message("Мита", response, is_mita=True)
-                speak(response)
-            except Exception as e:
-                print(f"[Ошибка Groq]: {e}")
-                interface.add_chat_message("Мита", T("error_text").format(e), is_mita=True)
-    else:
-        if not system_response:
-            response = T("command_not_found")
+        print("[Стелла]: Обращаюсь к ИИ...")
+        try:
+            response = ask_groq(phrase)
+            print(f"[Стелла]: {response}")
             interface.add_chat_message("Мита", response, is_mita=True)
             speak(response)
+        except Exception as e:
+            print(f"[Ошибка Groq]: {e}")
+            interface.add_chat_message("Мита", T("error_text").format(e), is_mita=True)
+    elif not system_response:
+        response = T("command_not_found")
+        interface.add_chat_message("Мита", response, is_mita=True)
+        speak(response)
 
     interface.set_processing(False)
 
@@ -3082,6 +6002,20 @@ def process_system_command(phrase: str, interface):
     cleaned = phrase.lower().strip()
     words = cleaned.split()
     ui_lang = UI_LANGUAGE
+
+    if is_weather_request(cleaned):
+        result = get_local_weather(force=False, lang=("ua" if UI_LANGUAGE == "ua" else "ru"))
+        if result.get("ok"):
+            msg = result["report"]
+            interface.add_chat_message("Мита", msg, is_mita=True)
+            try: interface.root.after(0, lambda r=result: interface._apply_weather_result(r, silent=True, speak_result=False))
+            except Exception: pass
+            speak(msg, force=True)
+        else:
+            msg = result.get("error") or "Не удалось получить погоду."
+            interface.add_chat_message("Мита", msg, is_mita=True)
+            speak(msg, force=True)
+        return True
 
     if "все окна" in cleaned or "сверни все" in cleaned or "усі вікна" in cleaned or "згорни всі" in cleaned:
         minimize_all_windows()
@@ -3140,10 +6074,15 @@ def process_system_command(phrase: str, interface):
         if verb in cleaned:
             target = cleaned.replace(verb, "").strip()
             if target:
-                if launch_application(target):
-                    speak(T("app_launching").format(target), force=True)
+                ok, matched = smart_launch_application(target)
+                if ok:
+                    msg = T("app_launching").format(matched or target)
+                    interface.add_chat_message("Мита", msg, is_mita=True)
+                    speak(msg, force=True)
                 else:
-                    speak(T("app_not_found").format(target), force=True)
+                    msg = T("app_not_found").format(target)
+                    interface.add_chat_message("Мита", msg, is_mita=True)
+                    speak(msg, force=True)
             return True
 
     web_verbs_ru = ["открой", "открыть", "перейди", "перейти", "покажи"]
