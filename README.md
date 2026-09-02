@@ -523,13 +523,143 @@ def _mita_bigrams(s):
         return {s} if s else set()
     return {s[i:i+2] for i in range(len(s)-1)}
 
+
+def _mita_split_app_words(value):
+    """
+    Делит имя приложения на слова:
+    RobloxStudio -> Roblox Studio
+    Lively_Wallpaper -> Lively Wallpaper
+    discord.exe -> discord
+    """
+    s = os.path.splitext(os.path.basename(str(value or "")))[0]
+    s = re.sub(r"([a-zа-яёіїєґ0-9])([A-ZА-ЯЁІЇЄҐ])", r"\1 \2", s)
+    s = re.sub(r"[^0-9A-Za-zА-Яа-яЁёІіЇїЄєҐґ]+", " ", s)
+    return [w for w in s.strip().split() if w]
+
+
+def _mita_short_word(word, count=2):
+    """
+    Автоматическое короткое имя по согласным.
+    roblox -> rb
+    discord -> ds
+    lively -> lv
+    studio -> st
+    """
+    n = _mita_app_norm(word)
+    if not n:
+        return ""
+
+    vowels = set("aeiouy")
+    consonants = [ch for ch in n if ch.isalpha() and ch not in vowels]
+
+    if len(consonants) >= count:
+        return "".join(consonants[:count])
+
+    return n[:count]
+
+
+def _mita_generate_aliases(display, folder_name=""):
+    """
+    Сам строит варианты, поэтому вручную вписывать каждую программу не нужно.
+
+    Примеры:
+      Roblox          -> roblox, rb
+      Roblox Studio   -> roblox studio, rs, rb studio, rbst
+      Lively Wallpaper-> lively wallpaper, lw, lv wallpaper, lvwl
+    """
+    aliases = set()
+
+    def add(v):
+        v = str(v or "").strip()
+        if v:
+            aliases.add(v)
+
+    add(display)
+
+    words = _mita_split_app_words(display)
+    lower_words = [w.lower() for w in words]
+
+    if words:
+        add(" ".join(words))
+        add("".join(words))
+
+        # Каждое слово тоже может быть голосовым вариантом.
+        for w in words:
+            if len(_mita_app_norm(w)) >= 3:
+                add(w)
+
+        # Первые буквы слов: Roblox Studio -> RS
+        if len(words) >= 2:
+            initials = "".join(_mita_app_norm(w)[:1] for w in words if _mita_app_norm(w))
+            add(initials)
+
+        # Сокращения по согласным.
+        shorts = [_mita_short_word(w, 2) for w in words]
+        shorts = [x for x in shorts if x]
+
+        if shorts:
+            # Roblox -> rb
+            if len(words) == 1:
+                add(shorts[0])
+
+            # Roblox Studio -> rb studio
+            add(" ".join([shorts[0]] + lower_words[1:]))
+
+            # Roblox Studio -> rb st / rbst
+            add(" ".join(shorts))
+            add("".join(shorts))
+
+    if folder_name:
+        add(folder_name)
+        add(f"{folder_name} {display}")
+
+    # Частые программы — добавляем понятные разговорные варианты,
+    # но основной поиск всё равно работает автоматически для любых EXE/LNK.
+    norm_name = _mita_app_norm(display)
+
+    if "robloxstudio" in norm_name or ("roblox" in norm_name and "studio" in norm_name):
+        aliases.update({
+            "roblox studio", "robloxstudio",
+            "rb studio", "rbstudio", "rb st", "rbst",
+            "рб студио", "рбстудио", "рб студия",
+            "роблокс студио", "роблокс студия",
+        })
+    elif "roblox" in norm_name:
+        aliases.update({
+            "roblox", "rb", "рб",
+            "роблокс", "роблекс", "роблакс",
+        })
+
+    if "discord" in norm_name:
+        aliases.update({
+            "discord", "ds", "дс", "disc",
+            "дискорд", "дискорд",
+        })
+
+    if "steam" in norm_name:
+        aliases.update({"steam", "st", "стим"})
+
+    if "telegram" in norm_name:
+        aliases.update({"telegram", "tg", "тг", "телеграм", "телега"})
+
+    return list(aliases)
+
+
 def _mita_similarity(a, b):
     a = _mita_app_norm(a)
     b = _mita_app_norm(b)
+
     if not a or not b:
         return 0.0
+
     if a == b:
         return 1.0
+
+    # Для очень коротких команд не разрешаем случайное "похоже".
+    # Они должны реально совпасть с автоматически созданным сокращением.
+    if len(a) <= 2:
+        return 0.0
+
     if a in b or b in a:
         shorter = min(len(a), len(b))
         longer = max(len(a), len(b))
@@ -539,19 +669,21 @@ def _mita_similarity(a, b):
     ag, bg = _mita_bigrams(a), _mita_bigrams(b)
     dice = (2.0 * len(ag & bg) / (len(ag) + len(bg))) if ag and bg else 0.0
 
-    # Сильнее ценим начало слова: "ливили" -> "Lively Wallpaper"
     prefix = 0.0
     lim = min(len(a), len(b), 8)
     same = 0
+
     for i in range(lim):
         if a[i] == b[i]:
             same += 1
         else:
             break
+
     if lim:
         prefix = same / lim
 
     return max(seq, 0.58 * seq + 0.27 * dice + 0.15 * prefix)
+
 
 def _ensure_mita_apps_dir():
     try:
@@ -559,60 +691,128 @@ def _ensure_mita_apps_dir():
     except Exception as e:
         print(f"[Mita Folder Apps] Не удалось создать папку: {e}")
 
+
 def _build_mita_apps_index(force=False):
     global _MITA_APPS_INDEX, _MITA_APPS_INDEX_TIME
+
     _ensure_mita_apps_dir()
     now = time.time()
+
     if not force and _MITA_APPS_INDEX and now - _MITA_APPS_INDEX_TIME < _MITA_APPS_INDEX_TTL:
         return _MITA_APPS_INDEX
 
     items = []
+
     try:
         for root, _, files in os.walk(MITA_APPS_DIR):
             for filename in files:
                 ext = os.path.splitext(filename)[1].lower()
+
                 if ext not in (".exe", ".lnk"):
                     continue
+
                 path = os.path.join(root, filename)
                 display = os.path.splitext(filename)[0]
-                aliases = {display}
 
-                # Имя подпапки тоже участвует в поиске.
                 rel_root = os.path.relpath(root, MITA_APPS_DIR)
+                folder_name = ""
                 if rel_root != ".":
-                    aliases.add(os.path.basename(rel_root))
-                    aliases.add(os.path.basename(rel_root) + " " + display)
+                    folder_name = os.path.basename(rel_root)
+
+                aliases = _mita_generate_aliases(display, folder_name)
 
                 items.append({
                     "name": display,
                     "path": path,
-                    "aliases": list(aliases),
+                    "aliases": aliases,
+                    "word_count": max(1, len(_mita_split_app_words(display))),
                 })
+
+                print(
+                    f"[Mita Apps Index] {display} | "
+                    f"aliases={', '.join(sorted(aliases)[:12])}"
+                )
+
     except Exception as e:
         print(f"[Mita Folder Apps] Ошибка сканирования: {e}")
 
     _MITA_APPS_INDEX = items
     _MITA_APPS_INDEX_TIME = now
-    print(f"[Mita Folder Apps] Найдено приложений: {len(items)} | {MITA_APPS_DIR}")
+
+    print(
+        f"[Mita Folder Apps] Найдено приложений: "
+        f"{len(items)} | {MITA_APPS_DIR}"
+    )
+
     return items
+
 
 def _find_mita_folder_app(spoken_name):
     query = str(spoken_name or "").strip()
+
     if not query:
         return None, 0.0
 
-    best = None
-    best_score = 0.0
-    for item in _build_mita_apps_index(force=True):
-        score = 0.0
-        for alias in item.get("aliases", []):
-            score = max(score, _mita_similarity(query, alias))
-        if score > best_score:
-            best, best_score = item, score
+    query_norm = _mita_app_norm(query)
+    candidates = []
 
-    if best:
-        print(f"[Mita Folder Match] {query!r} -> {best['name']!r} | score={best_score:.2f}")
-    return best, best_score
+    for item in _build_mita_apps_index(force=True):
+        best_alias = ""
+        best_score = 0.0
+        exact_alias = False
+
+        for alias in item.get("aliases", []):
+            alias_norm = _mita_app_norm(alias)
+
+            if query_norm and query_norm == alias_norm:
+                score = 1.0
+                exact_alias = True
+            else:
+                score = _mita_similarity(query, alias)
+
+            if score > best_score:
+                best_score = score
+                best_alias = alias
+
+        candidates.append({
+            "item": item,
+            "score": best_score,
+            "alias": best_alias,
+            "exact": exact_alias,
+        })
+
+    if not candidates:
+        return None, 0.0
+
+    # Сначала точное сокращение/алиас.
+    exact = [c for c in candidates if c["exact"]]
+
+    if exact:
+        # Важный случай:
+        # "рб" может совпасть и с Roblox, и с Roblox Studio.
+        # Выбираем более короткое имя -> Roblox.
+        # "рб студио" совпадёт только с Roblox Studio.
+        exact.sort(
+            key=lambda c: (
+                c["item"].get("word_count", 99),
+                len(c["item"]["name"]),
+            )
+        )
+        winner = exact[0]
+    else:
+        candidates.sort(key=lambda c: c["score"], reverse=True)
+        winner = candidates[0]
+
+    item = winner["item"]
+    score = winner["score"]
+
+    print(
+        f"[Mita Smart Alias] {query!r} -> {item['name']!r} "
+        f"| alias={winner['alias']!r} | score={score:.2f}"
+    )
+
+    return item, score
+
 
 def smart_launch_application(target_raw):
     """Запускает приложение ТОЛЬКО из MitaApps. Groq/Steam/реестр не используются."""
@@ -621,7 +821,7 @@ def smart_launch_application(target_raw):
         return False, None
 
     item, score = _find_mita_folder_app(target)
-    # Порог достаточно мягкий для голосовых ошибок, но не запускаем совсем случайные совпадения.
+    # Точные сокращения (рб, рб студио, дс и т.п.) получают score=1.0; для остальных голосовых ошибок остаётся нечёткий поиск.
     if not item or score < 0.48:
         play_sound("error")
         print(f"[Mita Folder Apps] Не найдено: {target!r}; best={score:.2f}")
