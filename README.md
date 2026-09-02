@@ -525,26 +525,13 @@ def _mita_bigrams(s):
 
 
 def _mita_split_app_words(value):
-    """
-    Делит имя приложения на слова:
-    RobloxStudio -> Roblox Studio
-    Lively_Wallpaper -> Lively Wallpaper
-    discord.exe -> discord
-    """
     s = os.path.splitext(os.path.basename(str(value or "")))[0]
     s = re.sub(r"([a-zа-яёіїєґ0-9])([A-ZА-ЯЁІЇЄҐ])", r"\1 \2", s)
-    s = re.sub(r"[^0-9A-Za-zА-Яа-яЁёІіЇїЄєҐґ]+", " ", s)
+    s = re.sub(r"[^0-9A-Za-zА-Яа-яЁёІіЇїЄєҐ]+", " ", s)
     return [w for w in s.strip().split() if w]
 
 
 def _mita_short_word(word, count=2):
-    """
-    Автоматическое короткое имя по согласным.
-    roblox -> rb
-    discord -> ds
-    lively -> lv
-    studio -> st
-    """
     n = _mita_app_norm(word)
     if not n:
         return ""
@@ -559,14 +546,6 @@ def _mita_short_word(word, count=2):
 
 
 def _mita_generate_aliases(display, folder_name=""):
-    """
-    Сам строит варианты, поэтому вручную вписывать каждую программу не нужно.
-
-    Примеры:
-      Roblox          -> roblox, rb
-      Roblox Studio   -> roblox studio, rs, rb studio, rbst
-      Lively Wallpaper-> lively wallpaper, lw, lv wallpaper, lvwl
-    """
     aliases = set()
 
     def add(v):
@@ -583,29 +562,22 @@ def _mita_generate_aliases(display, folder_name=""):
         add(" ".join(words))
         add("".join(words))
 
-        # Каждое слово тоже может быть голосовым вариантом.
         for w in words:
             if len(_mita_app_norm(w)) >= 3:
                 add(w)
 
-        # Первые буквы слов: Roblox Studio -> RS
         if len(words) >= 2:
             initials = "".join(_mita_app_norm(w)[:1] for w in words if _mita_app_norm(w))
             add(initials)
 
-        # Сокращения по согласным.
         shorts = [_mita_short_word(w, 2) for w in words]
         shorts = [x for x in shorts if x]
 
         if shorts:
-            # Roblox -> rb
             if len(words) == 1:
                 add(shorts[0])
 
-            # Roblox Studio -> rb studio
             add(" ".join([shorts[0]] + lower_words[1:]))
-
-            # Roblox Studio -> rb st / rbst
             add(" ".join(shorts))
             add("".join(shorts))
 
@@ -613,34 +585,37 @@ def _mita_generate_aliases(display, folder_name=""):
         add(folder_name)
         add(f"{folder_name} {display}")
 
-    # Частые программы — добавляем понятные разговорные варианты,
-    # но основной поиск всё равно работает автоматически для любых EXE/LNK.
     norm_name = _mita_app_norm(display)
+
+    if "discord" in norm_name or "diskord" in norm_name:
+        aliases.update({
+            "discord", "diskord",
+            "дискорд", "дискорд",
+            "ds", "дс", "д с",
+        })
 
     if "robloxstudio" in norm_name or ("roblox" in norm_name and "studio" in norm_name):
         aliases.update({
             "roblox studio", "robloxstudio",
-            "rb studio", "rbstudio", "rb st", "rbst",
-            "рб студио", "рбстудио", "рб студия",
             "роблокс студио", "роблокс студия",
+            "rb studio", "rbstudio", "rb st", "rbst",
+            "рб студио", "рбстудио", "рб ст",
         })
     elif "roblox" in norm_name:
         aliases.update({
-            "roblox", "rb", "рб",
+            "roblox", "robloks",
             "роблокс", "роблекс", "роблакс",
+            "rb", "рб", "р б",
         })
-
-    if "discord" in norm_name:
-        aliases.update({
-            "discord", "ds", "дс", "disc",
-            "дискорд", "дискорд",
-        })
-
-    if "steam" in norm_name:
-        aliases.update({"steam", "st", "стим"})
 
     if "telegram" in norm_name:
-        aliases.update({"telegram", "tg", "тг", "телеграм", "телега"})
+        aliases.update({"telegram", "телеграм", "телега", "tg", "тг", "т г"})
+
+    if "steam" in norm_name or "stim" in norm_name:
+        aliases.update({"steam", "stim", "стим", "st", "ст"})
+
+    if "spotify" in norm_name or "spotifay" in norm_name:
+        aliases.update({"spotify", "spotifay", "спотифай", "sp", "сп"})
 
     return list(aliases)
 
@@ -655,8 +630,6 @@ def _mita_similarity(a, b):
     if a == b:
         return 1.0
 
-    # Для очень коротких команд не разрешаем случайное "похоже".
-    # Они должны реально совпасть с автоматически созданным сокращением.
     if len(a) <= 2:
         return 0.0
 
@@ -730,7 +703,7 @@ def _build_mita_apps_index(force=False):
 
                 print(
                     f"[Mita Apps Index] {display} | "
-                    f"aliases={', '.join(sorted(aliases)[:12])}"
+                    f"aliases={', '.join(sorted(aliases)[:15])}"
                 )
 
     except Exception as e:
@@ -739,11 +712,7 @@ def _build_mita_apps_index(force=False):
     _MITA_APPS_INDEX = items
     _MITA_APPS_INDEX_TIME = now
 
-    print(
-        f"[Mita Folder Apps] Найдено приложений: "
-        f"{len(items)} | {MITA_APPS_DIR}"
-    )
-
+    print(f"[Mita Folder Apps] Найдено приложений: {len(items)} | {MITA_APPS_DIR}")
     return items
 
 
@@ -782,16 +751,12 @@ def _find_mita_folder_app(spoken_name):
         })
 
     if not candidates:
+        print(f"[Mita Smart Alias] В MitaApps нет .exe/.lnk")
         return None, 0.0
 
-    # Сначала точное сокращение/алиас.
     exact = [c for c in candidates if c["exact"]]
 
     if exact:
-        # Важный случай:
-        # "рб" может совпасть и с Roblox, и с Roblox Studio.
-        # Выбираем более короткое имя -> Roblox.
-        # "рб студио" совпадёт только с Roblox Studio.
         exact.sort(
             key=lambda c: (
                 c["item"].get("word_count", 99),
@@ -821,7 +786,7 @@ def smart_launch_application(target_raw):
         return False, None
 
     item, score = _find_mita_folder_app(target)
-    # Точные сокращения (рб, рб студио, дс и т.п.) получают score=1.0; для остальных голосовых ошибок остаётся нечёткий поиск.
+    # Порог достаточно мягкий для голосовых ошибок, но не запускаем совсем случайные совпадения.
     if not item or score < 0.48:
         play_sound("error")
         print(f"[Mita Folder Apps] Не найдено: {target!r}; best={score:.2f}")
@@ -6815,5 +6780,6 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
