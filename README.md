@@ -28,58 +28,49 @@ import urllib.error
 from datetime import datetime, timedelta
 from pathlib import Path
 from groq import Groq
-
-# ============================================================
-# ДОПОЛНИТЕЛЬНЫЕ ИМПОРТЫ ДЛЯ ВОСПРОИЗВЕДЕНИЯ МУЗЫКИ
-# ============================================================
+============================================================
+ДОПОЛНИТЕЛЬНЫЕ ИМПОРТЫ ДЛЯ ВОСПРОИЗВЕДЕНИЯ МУЗЫКИ
+============================================================
 try:
-    import yt_dlp
-    HAS_YDL = True
+import yt_dlp
+HAS_YDL = True
 except ImportError:
-    HAS_YDL = False
-
+HAS_YDL = False
 try:
-    import vlc
-    HAS_VLC = True
+import vlc
+HAS_VLC = True
 except ImportError:
-    HAS_VLC = False
-
-# ============================================================
-# ЕСТЕСТВЕННЫЙ ЖЕНСКИЙ ГОЛОС MITA (Microsoft Edge TTS)
-# ============================================================
+HAS_VLC = False
+============================================================
+ЕСТЕСТВЕННЫЙ ЖЕНСКИЙ ГОЛОС MITA (Microsoft Edge TTS)
+============================================================
 try:
-    import asyncio
-    import edge_tts
-    import pygame
-    HAS_EDGE_TTS = True
+import asyncio
+import edge_tts
+import pygame
+HAS_EDGE_TTS = True
 except ImportError:
-    HAS_EDGE_TTS = False
-
-# ============================================================
-# НАСТРОЙКИ ДЛЯ COOKIES YOUTUBE
-# ============================================================
-
+HAS_EDGE_TTS = False
+============================================================
+НАСТРОЙКИ ДЛЯ COOKIES YOUTUBE
+============================================================
 def get_base_path():
-    if getattr(sys, 'frozen', False):
-        return os.path.dirname(sys.executable)
-    else:
-        return os.path.dirname(os.path.abspath(__file__))
-
+if getattr(sys, 'frozen', False):
+return os.path.dirname(sys.executable)
+else:
+return os.path.dirname(os.path.abspath(file))
 BASE_DIR = get_base_path()
 
-
-# ============================================================
-# СТАРТОВАЯ ПРОВЕРКА ФАЙЛОВ И ПАПОК
-# ============================================================
-
+============================================================
+СТАРТОВАЯ ПРОВЕРКА ФАЙЛОВ И ПАПОК
+============================================================
 def startup_environment_check():
-    """
-    Стартовое окно проверки.
-    У КАЖДОГО отсутствующего элемента своя кнопка "СОЗДАТЬ".
-    Пока есть отсутствующие обязательные папки — продолжить нельзя.
-    Если закрыть окно — программа полностью завершится.
-    """
-
+"""
+Стартовое окно проверки.
+У КАЖДОГО отсутствующего элемента своя кнопка "СОЗДАТЬ".
+Пока есть отсутствующие обязательные папки — продолжить нельзя.
+Если закрыть окно — программа полностью завершится.
+"""
     required_items = [
         {
             "name": "MitaApps",
@@ -459,83 +450,75 @@ def startup_environment_check():
     return result["allow"]
 
 
-# Проверка запускается до основной программы.
-# Если пользователь закрыл окно — Мита не запускается.
+
+Проверка запускается до основной программы.
+Если пользователь закрыл окно — Мита не запускается.
 if not startup_environment_check():
-    print("❌ Старт отменён. Программа закрыта.")
-    sys.exit(0)
+print("❌ Старт отменён. Программа закрыта.")
+sys.exit(0)
 
-
-# ============================================================
-# MITA LOCAL APPS — запуск ТОЛЬКО из папки MitaApps, без ИИ
-# ============================================================
-# Положи сюда .exe или .lnk нужных программ:
-#   <папка со скриптом>/MitaApps/
-# Можно делать подпапки. Для установленных программ лучше класть ярлыки .lnk,
-# потому что простой перенос EXE из папки установленной программы иногда ломает её.
+============================================================
+MITA LOCAL APPS — запуск ТОЛЬКО из папки MitaApps, без ИИ
+============================================================
+Положи сюда .exe или .lnk нужных программ:
+<папка со скриптом>/MitaApps/
+Можно делать подпапки. Для установленных программ лучше класть ярлыки .lnk,
+потому что простой перенос EXE из папки установленной программы иногда ломает её.
 MITA_APPS_DIR = os.path.join(BASE_DIR, "MitaApps")
 _MITA_APPS_INDEX = []
 _MITA_APPS_INDEX_TIME = 0.0
 _MITA_APPS_INDEX_TTL = 2.0
-
 _CYR_TO_LAT = {
-    "а":"a","б":"b","в":"v","г":"g","ґ":"g","д":"d","е":"e","ё":"yo","є":"ye",
-    "ж":"zh","з":"z","и":"i","і":"i","ї":"yi","й":"y","к":"k","л":"l","м":"m",
-    "н":"n","о":"o","п":"p","р":"r","с":"s","т":"t","у":"u","ф":"f","х":"h",
-    "ц":"ts","ч":"ch","ш":"sh","щ":"sch","ъ":"","ы":"y","ь":"","э":"e","ю":"yu","я":"ya"
+"а":"a","б":"b","в":"v","г":"g","ґ":"g","д":"d","е":"e","ё":"yo","є":"ye",
+"ж":"zh","з":"z","и":"i","і":"i","ї":"yi","й":"y","к":"k","л":"l","м":"m",
+"н":"n","о":"o","п":"p","р":"r","с":"s","т":"t","у":"u","ф":"f","х":"h",
+"ц":"ts","ч":"ch","ш":"sh","щ":"sch","ъ":"","ы":"y","ь":"","э":"e","ю":"yu","я":"ya"
 }
-
-# Частые варианты того, как английские звуки попадают в русское распознавание.
+Частые варианты того, как английские звуки попадают в русское распознавание.
 _PHONETIC_REPLACEMENTS = (
-    ("wallpaper", "volpeyper"), ("wall paper", "volpeyper"),
-    ("lively", "liveli"), ("liveley", "liveli"),
-    ("discord", "diskord"), ("telegram", "telegram"),
-    ("spotify", "spotifay"), ("steam", "stim"),
-    ("chrome", "hrom"), ("firefox", "fayrfoks"),
-    ("roblox", "robloks"), ("launcher", "loncher"),
+("wallpaper", "volpeyper"), ("wall paper", "volpeyper"),
+("lively", "liveli"), ("liveley", "liveli"),
+("discord", "diskord"), ("telegram", "telegram"),
+("spotify", "spotifay"), ("steam", "stim"),
+("chrome", "hrom"), ("firefox", "fayrfoks"),
+("roblox", "robloks"), ("launcher", "loncher"),
 )
-
 def _mita_translit(value):
-    s = str(value or "").lower()
-    return "".join(_CYR_TO_LAT.get(ch, ch) for ch in s)
-
+s = str(value or "").lower()
+return "".join(_CYR_TO_LAT.get(ch, ch) for ch in s)
 def _mita_app_norm(value):
-    s = str(value or "").lower().strip()
-    s = os.path.splitext(os.path.basename(s))[0]
-    s = _mita_translit(s)
-    for old, new in _PHONETIC_REPLACEMENTS:
-        s = s.replace(old, new)
-    s = re.sub(r"[^a-z0-9]+", "", s)
-    # Небольшая фонетическая нормализация: разные записи похожих звуков
-    for old, new in (
-        ("ye", "e"), ("yo", "o"), ("yu", "u"), ("ya", "a"),
-        ("sch", "sh"), ("zh", "j"), ("ch", "c"), ("ts", "c"),
-        ("ph", "f"), ("ck", "k"), ("qu", "kv"), ("w", "v"),
-        ("x", "ks"), ("oo", "u"), ("ee", "i"),
-    ):
-        s = s.replace(old, new)
-    # Повторные буквы распознавания не должны мешать: livellly -> lively
-    s = re.sub(r"(.)\\1+", r"\\1", s)
-    return s
-
+s = str(value or "").lower().strip()
+s = os.path.splitext(os.path.basename(s))[0]
+s = _mita_translit(s)
+for old, new in _PHONETIC_REPLACEMENTS:
+s = s.replace(old, new)
+s = re.sub(r"[^a-z0-9]+", "", s)
+# Небольшая фонетическая нормализация: разные записи похожих звуков
+for old, new in (
+("ye", "e"), ("yo", "o"), ("yu", "u"), ("ya", "a"),
+("sch", "sh"), ("zh", "j"), ("ch", "c"), ("ts", "c"),
+("ph", "f"), ("ck", "k"), ("qu", "kv"), ("w", "v"),
+("x", "ks"), ("oo", "u"), ("ee", "i"),
+):
+s = s.replace(old, new)
+# Повторные буквы распознавания не должны мешать: livellly -> lively
+s = re.sub(r"(.)\1+", r"\1", s)
+return s
 def _mita_bigrams(s):
-    if len(s) < 2:
-        return {s} if s else set()
-    return {s[i:i+2] for i in range(len(s)-1)}
-
+if len(s) < 2:
+return {s} if s else set()
+return {s[i:i+2] for i in range(len(s)-1)}
 
 def _mita_split_app_words(value):
-    s = os.path.splitext(os.path.basename(str(value or "")))[0]
-    s = re.sub(r"([a-zа-яёіїєґ0-9])([A-ZА-ЯЁІЇЄҐ])", r"\1 \2", s)
-    s = re.sub(r"[^0-9A-Za-zА-Яа-яЁёІіЇїЄєҐ]+", " ", s)
-    return [w for w in s.strip().split() if w]
-
+s = os.path.splitext(os.path.basename(str(value or "")))[0]
+s = re.sub(r"([a-zа-яёіїєґ0-9])([A-ZА-ЯЁІЇЄҐ])", r"\1 \2", s)
+s = re.sub(r"[^0-9A-Za-zА-Яа-яЁёІіЇїЄєҐ]+", " ", s)
+return [w for w in s.strip().split() if w]
 
 def _mita_short_word(word, count=2):
-    n = _mita_app_norm(word)
-    if not n:
-        return ""
-
+n = _mita_app_norm(word)
+if not n:
+return ""
     vowels = set("aeiouy")
     consonants = [ch for ch in n if ch.isalpha() and ch not in vowels]
 
@@ -545,9 +528,9 @@ def _mita_short_word(word, count=2):
     return n[:count]
 
 
-def _mita_generate_aliases(display, folder_name=""):
-    aliases = set()
 
+def _mita_generate_aliases(display, folder_name=""):
+aliases = set()
     def add(v):
         v = str(v or "").strip()
         if v:
@@ -620,10 +603,10 @@ def _mita_generate_aliases(display, folder_name=""):
     return list(aliases)
 
 
-def _mita_similarity(a, b):
-    a = _mita_app_norm(a)
-    b = _mita_app_norm(b)
 
+def _mita_similarity(a, b):
+a = _mita_app_norm(a)
+b = _mita_app_norm(b)
     if not a or not b:
         return 0.0
 
@@ -658,16 +641,15 @@ def _mita_similarity(a, b):
     return max(seq, 0.58 * seq + 0.27 * dice + 0.15 * prefix)
 
 
-def _ensure_mita_apps_dir():
-    try:
-        os.makedirs(MITA_APPS_DIR, exist_ok=True)
-    except Exception as e:
-        print(f"[Mita Folder Apps] Не удалось создать папку: {e}")
 
+def _ensure_mita_apps_dir():
+try:
+os.makedirs(MITA_APPS_DIR, exist_ok=True)
+except Exception as e:
+print(f"[Mita Folder Apps] Не удалось создать папку: {e}")
 
 def _build_mita_apps_index(force=False):
-    global _MITA_APPS_INDEX, _MITA_APPS_INDEX_TIME
-
+global _MITA_APPS_INDEX, _MITA_APPS_INDEX_TIME
     _ensure_mita_apps_dir()
     now = time.time()
 
@@ -716,9 +698,9 @@ def _build_mita_apps_index(force=False):
     return items
 
 
-def _find_mita_folder_app(spoken_name):
-    query = str(spoken_name or "").strip()
 
+def _find_mita_folder_app(spoken_name):
+query = str(spoken_name or "").strip()
     if not query:
         return None, 0.0
 
@@ -779,12 +761,12 @@ def _find_mita_folder_app(spoken_name):
     return item, score
 
 
-def smart_launch_application(target_raw):
-    """Запускает приложение ТОЛЬКО из MitaApps. Groq/Steam/реестр не используются."""
-    target = str(target_raw or "").strip()
-    if not target:
-        return False, None
 
+def smart_launch_application(target_raw):
+"""Запускает приложение ТОЛЬКО из MitaApps. Groq/Steam/реестр не используются."""
+target = str(target_raw or "").strip()
+if not target:
+return False, None
     item, score = _find_mita_folder_app(target)
     # Порог достаточно мягкий для голосовых ошибок, но не запускаем совсем случайные совпадения.
     if not item or score < 0.48:
@@ -802,22 +784,21 @@ def smart_launch_application(target_raw):
         return False, None
 
 def try_folder_app_voice_command(phrase, interface):
-    """Перехватывает команды запуска ДО ИИ-планировщика."""
-    text = str(phrase or "").lower().strip()
-    verbs = (
-        "запусти", "запустить", "включи", "включить", "открой", "открыть",
-        "увімкни", "відкрий", "відкрити", "запускай"
-    )
-    target = ""
-    for verb in verbs:
-        if text == verb:
-            return False
-        if text.startswith(verb + " "):
-            target = text[len(verb):].strip()
-            break
-    if not target:
-        return False
-
+"""Перехватывает команды запуска ДО ИИ-планировщика."""
+text = str(phrase or "").lower().strip()
+verbs = (
+"запусти", "запустить", "включи", "включить", "открой", "открыть",
+"увімкни", "відкрий", "відкрити", "запускай"
+)
+target = ""
+for verb in verbs:
+if text == verb:
+return False
+if text.startswith(verb + " "):
+target = text[len(verb):].strip()
+break
+if not target:
+return False
     item, score = _find_mita_folder_app(target)
     if not item or score < 0.48:
         # Если команда явно "запусти/включи", считаем её обработанной и не даём ИИ
@@ -844,161 +825,153 @@ def try_folder_app_voice_command(phrase, interface):
         print(f"[Mita Folder Voice] Ошибка: {e}")
         return True
 
-# ============================================================
-# MITA SMART WEATHER / IP GEOLOCATION ENGINE
-# ============================================================
-# Работает без API-ключа:
-#   1) определяет приблизительный город по публичному IP;
-#   2) берёт координаты;
-#   3) получает погоду Open-Meteo;
-#   4) кэширует результат, чтобы не делать лишние запросы.
-# Важно: геолокация по IP приблизительная и может указывать город провайдера/VPN.
-
+============================================================
+MITA SMART WEATHER / IP GEOLOCATION ENGINE
+============================================================
+Работает без API-ключа:
+1) определяет приблизительный город по публичному IP;
+2) берёт координаты;
+3) получает погоду Open-Meteo;
+4) кэширует результат, чтобы не делать лишние запросы.
+Важно: геолокация по IP приблизительная и может указывать город провайдера/VPN.
 _WEATHER_CACHE = {
-    "created": 0.0,
-    "location": None,
-    "weather": None,
-    "report_ru": None,
-    "report_ua": None,
+"created": 0.0,
+"location": None,
+"weather": None,
+"report_ru": None,
+"report_ua": None,
 }
 _WEATHER_CACHE_TTL = 600.0
-
 def _http_json(url: str, timeout: float = 6.0):
-    req = urllib.request.Request(
-        url,
-        headers={
-            "User-Agent": "MitaDesktopAssistant/4.0",
-            "Accept": "application/json",
-            "Cache-Control": "no-cache",
-        },
-        method="GET",
-    )
-    with urllib.request.urlopen(req, timeout=timeout) as response:
-        raw = response.read()
-    return json.loads(raw.decode("utf-8", errors="replace"))
-
+req = urllib.request.Request(
+url,
+headers={
+"User-Agent": "MitaDesktopAssistant/4.0",
+"Accept": "application/json",
+"Cache-Control": "no-cache",
+},
+method="GET",
+)
+with urllib.request.urlopen(req, timeout=timeout) as response:
+raw = response.read()
+return json.loads(raw.decode("utf-8", errors="replace"))
 def _detect_location_by_ip():
-    """Определяет город/координаты по IP с несколькими резервными сервисами."""
-    errors = []
-    providers = [
-        (
-            "ipapi",
-            "https://ipapi.co/json/",
-            lambda d: {
-                "city": d.get("city") or "",
-                "region": d.get("region") or "",
-                "country": d.get("country_name") or d.get("country") or "",
-                "latitude": d.get("latitude"),
-                "longitude": d.get("longitude"),
-                "timezone": d.get("timezone") or "auto",
-                "ip": d.get("ip") or "",
-                "provider": "ipapi.co",
-            },
-        ),
-        (
-            "ipwho",
-            "https://ipwho.is/",
-            lambda d: {
-                "city": d.get("city") or "",
-                "region": d.get("region") or "",
-                "country": d.get("country") or "",
-                "latitude": d.get("latitude"),
-                "longitude": d.get("longitude"),
-                "timezone": (d.get("timezone") or {}).get("id", "auto") if isinstance(d.get("timezone"), dict) else "auto",
-                "ip": d.get("ip") or "",
-                "provider": "ipwho.is",
-            },
-        ),
-    ]
-    for name, url, parser in providers:
-        try:
-            data = _http_json(url, timeout=5.0)
-            if name == "ipwho" and data.get("success") is False:
-                raise RuntimeError(data.get("message") or "IP service returned failure")
-            loc = parser(data)
-            if loc.get("latitude") is None or loc.get("longitude") is None:
-                raise RuntimeError("Нет координат")
-            loc["latitude"] = float(loc["latitude"])
-            loc["longitude"] = float(loc["longitude"])
-            return loc
-        except Exception as e:
-            errors.append(f"{name}: {e}")
-    raise RuntimeError("Не удалось определить город по IP: " + " | ".join(errors[-2:]))
-
+"""Определяет город/координаты по IP с несколькими резервными сервисами."""
+errors = []
+providers = [
+(
+"ipapi",
+"https://ipapi.co/json/",
+lambda d: {
+"city": d.get("city") or "",
+"region": d.get("region") or "",
+"country": d.get("country_name") or d.get("country") or "",
+"latitude": d.get("latitude"),
+"longitude": d.get("longitude"),
+"timezone": d.get("timezone") or "auto",
+"ip": d.get("ip") or "",
+"provider": "ipapi.co",
+},
+),
+(
+"ipwho",
+"https://ipwho.is/",
+lambda d: {
+"city": d.get("city") or "",
+"region": d.get("region") or "",
+"country": d.get("country") or "",
+"latitude": d.get("latitude"),
+"longitude": d.get("longitude"),
+"timezone": (d.get("timezone") or {}).get("id", "auto") if isinstance(d.get("timezone"), dict) else "auto",
+"ip": d.get("ip") or "",
+"provider": "ipwho.is",
+},
+),
+]
+for name, url, parser in providers:
+try:
+data = _http_json(url, timeout=5.0)
+if name == "ipwho" and data.get("success") is False:
+raise RuntimeError(data.get("message") or "IP service returned failure")
+loc = parser(data)
+if loc.get("latitude") is None or loc.get("longitude") is None:
+raise RuntimeError("Нет координат")
+loc["latitude"] = float(loc["latitude"])
+loc["longitude"] = float(loc["longitude"])
+return loc
+except Exception as e:
+errors.append(f"{name}: {e}")
+raise RuntimeError("Не удалось определить город по IP: " + " | ".join(errors[-2:]))
 def _weather_code_info(code: int, lang: str = "ru"):
-    table_ru = {
-        0:("ясно","☀"), 1:("преимущественно ясно","🌤"), 2:("переменная облачность","⛅"), 3:("пасмурно","☁"),
-        45:("туман","🌫"), 48:("изморозь и туман","🌫"),
-        51:("слабая морось","🌦"), 53:("морось","🌦"), 55:("сильная морось","🌧"),
-        56:("слабая ледяная морось","🌧"), 57:("ледяная морось","🌧"),
-        61:("небольшой дождь","🌦"), 63:("дождь","🌧"), 65:("сильный дождь","🌧"),
-        66:("ледяной дождь","🌧"), 67:("сильный ледяной дождь","🌧"),
-        71:("небольшой снег","🌨"), 73:("снег","❄"), 75:("сильный снег","❄"), 77:("снежные зёрна","🌨"),
-        80:("небольшие ливни","🌦"), 81:("ливни","🌧"), 82:("сильные ливни","⛈"),
-        85:("слабый снегопад","🌨"), 86:("сильный снегопад","❄"),
-        95:("гроза","⛈"), 96:("гроза с градом","⛈"), 99:("сильная гроза с градом","⛈"),
-    }
-    table_ua = {
-        0:("ясно","☀"), 1:("переважно ясно","🌤"), 2:("мінлива хмарність","⛅"), 3:("хмарно","☁"),
-        45:("туман","🌫"), 48:("паморозь і туман","🌫"),
-        51:("слабка мряка","🌦"), 53:("мряка","🌦"), 55:("сильна мряка","🌧"),
-        56:("слабка крижана мряка","🌧"), 57:("крижана мряка","🌧"),
-        61:("невеликий дощ","🌦"), 63:("дощ","🌧"), 65:("сильний дощ","🌧"),
-        66:("крижаний дощ","🌧"), 67:("сильний крижаний дощ","🌧"),
-        71:("невеликий сніг","🌨"), 73:("сніг","❄"), 75:("сильний сніг","❄"), 77:("снігові зерна","🌨"),
-        80:("невеликі зливи","🌦"), 81:("зливи","🌧"), 82:("сильні зливи","⛈"),
-        85:("слабкий снігопад","🌨"), 86:("сильний снігопад","❄"),
-        95:("гроза","⛈"), 96:("гроза з градом","⛈"), 99:("сильна гроза з градом","⛈"),
-    }
-    table = table_ua if lang == "ua" else table_ru
-    return table.get(int(code or -1), (("невідома погода" if lang == "ua" else "неизвестная погода"), "◌"))
-
+table_ru = {
+0:("ясно","☀"), 1:("преимущественно ясно","🌤"), 2:("переменная облачность","⛅"), 3:("пасмурно","☁"),
+45:("туман","🌫"), 48:("изморозь и туман","🌫"),
+51:("слабая морось","🌦"), 53:("морось","🌦"), 55:("сильная морось","🌧"),
+56:("слабая ледяная морось","🌧"), 57:("ледяная морось","🌧"),
+61:("небольшой дождь","🌦"), 63:("дождь","🌧"), 65:("сильный дождь","🌧"),
+66:("ледяной дождь","🌧"), 67:("сильный ледяной дождь","🌧"),
+71:("небольшой снег","🌨"), 73:("снег","❄"), 75:("сильный снег","❄"), 77:("снежные зёрна","🌨"),
+80:("небольшие ливни","🌦"), 81:("ливни","🌧"), 82:("сильные ливни","⛈"),
+85:("слабый снегопад","🌨"), 86:("сильный снегопад","❄"),
+95:("гроза","⛈"), 96:("гроза с градом","⛈"), 99:("сильная гроза с градом","⛈"),
+}
+table_ua = {
+0:("ясно","☀"), 1:("переважно ясно","🌤"), 2:("мінлива хмарність","⛅"), 3:("хмарно","☁"),
+45:("туман","🌫"), 48:("паморозь і туман","🌫"),
+51:("слабка мряка","🌦"), 53:("мряка","🌦"), 55:("сильна мряка","🌧"),
+56:("слабка крижана мряка","🌧"), 57:("крижана мряка","🌧"),
+61:("невеликий дощ","🌦"), 63:("дощ","🌧"), 65:("сильний дощ","🌧"),
+66:("крижаний дощ","🌧"), 67:("сильний крижаний дощ","🌧"),
+71:("невеликий сніг","🌨"), 73:("сніг","❄"), 75:("сильний сніг","❄"), 77:("снігові зерна","🌨"),
+80:("невеликі зливи","🌦"), 81:("зливи","🌧"), 82:("сильні зливи","⛈"),
+85:("слабкий снігопад","🌨"), 86:("сильний снігопад","❄"),
+95:("гроза","⛈"), 96:("гроза з градом","⛈"), 99:("сильна гроза з градом","⛈"),
+}
+table = table_ua if lang == "ua" else table_ru
+return table.get(int(code or -1), (("невідома погода" if lang == "ua" else "неизвестная погода"), "◌"))
 def _wind_direction_name(deg, lang="ru"):
-    try:
-        deg = float(deg) % 360
-    except Exception:
-        return ""
-    dirs_ru = ["северный","северо-восточный","восточный","юго-восточный","южный","юго-западный","западный","северо-западный"]
-    dirs_ua = ["північний","північно-східний","східний","південно-східний","південний","південно-західний","західний","північно-західний"]
-    arr = dirs_ua if lang == "ua" else dirs_ru
-    return arr[int((deg + 22.5) // 45) % 8]
-
+try:
+deg = float(deg) % 360
+except Exception:
+return ""
+dirs_ru = ["северный","северо-восточный","восточный","юго-восточный","южный","юго-западный","западный","северо-западный"]
+dirs_ua = ["північний","північно-східний","східний","південно-східний","південний","південно-західний","західний","північно-західний"]
+arr = dirs_ua if lang == "ua" else dirs_ru
+return arr[int((deg + 22.5) // 45) % 8]
 def _fetch_open_meteo(lat: float, lon: float):
-    params = {
-        "latitude": f"{lat:.6f}",
-        "longitude": f"{lon:.6f}",
-        "current": ",".join([
-            "temperature_2m", "apparent_temperature", "relative_humidity_2m",
-            "precipitation", "rain", "weather_code", "cloud_cover",
-            "surface_pressure", "wind_speed_10m", "wind_direction_10m", "wind_gusts_10m"
-        ]),
-        "daily": ",".join([
-            "weather_code", "temperature_2m_max", "temperature_2m_min",
-            "precipitation_probability_max", "wind_speed_10m_max"
-        ]),
-        "forecast_days": "4",
-        "timezone": "auto",
-        "wind_speed_unit": "kmh",
-    }
-    url = "https://api.open-meteo.com/v1/forecast?" + urllib.parse.urlencode(params)
-    return _http_json(url, timeout=7.0)
-
+params = {
+"latitude": f"{lat:.6f}",
+"longitude": f"{lon:.6f}",
+"current": ",".join([
+"temperature_2m", "apparent_temperature", "relative_humidity_2m",
+"precipitation", "rain", "weather_code", "cloud_cover",
+"surface_pressure", "wind_speed_10m", "wind_direction_10m", "wind_gusts_10m"
+]),
+"daily": ",".join([
+"weather_code", "temperature_2m_max", "temperature_2m_min",
+"precipitation_probability_max", "wind_speed_10m_max"
+]),
+"forecast_days": "4",
+"timezone": "auto",
+"wind_speed_unit": "kmh",
+}
+url = "https://api.open-meteo.com/v1/forecast?" + urllib.parse.urlencode(params)
+return _http_json(url, timeout=7.0)
 def _format_weather_report(location, data, lang="ru", compact=False):
-    cur = data.get("current") or {}
-    daily = data.get("daily") or {}
-    city = location.get("city") or ("вашем городе" if lang == "ru" else "вашому місті")
-    region = location.get("region") or ""
-    temp = cur.get("temperature_2m")
-    feels = cur.get("apparent_temperature")
-    humidity = cur.get("relative_humidity_2m")
-    wind = cur.get("wind_speed_10m")
-    gust = cur.get("wind_gusts_10m")
-    wind_dir = _wind_direction_name(cur.get("wind_direction_10m"), lang)
-    clouds = cur.get("cloud_cover")
-    pressure = cur.get("surface_pressure")
-    precip = cur.get("precipitation")
-    desc, icon = _weather_code_info(cur.get("weather_code"), lang)
-
+cur = data.get("current") or {}
+daily = data.get("daily") or {}
+city = location.get("city") or ("вашем городе" if lang == "ru" else "вашому місті")
+region = location.get("region") or ""
+temp = cur.get("temperature_2m")
+feels = cur.get("apparent_temperature")
+humidity = cur.get("relative_humidity_2m")
+wind = cur.get("wind_speed_10m")
+gust = cur.get("wind_gusts_10m")
+wind_dir = _wind_direction_name(cur.get("wind_direction_10m"), lang)
+clouds = cur.get("cloud_cover")
+pressure = cur.get("surface_pressure")
+precip = cur.get("precipitation")
+desc, icon = _weather_code_info(cur.get("weather_code"), lang)
     def n(v, digits=0, fallback="—"):
         try:
             return f"{float(v):.{digits}f}"
@@ -1043,19 +1016,18 @@ def _format_weather_report(location, data, lang="ru", compact=False):
     return report
 
 def get_local_weather(force=False, lang=None):
-    lang = lang or ("ua" if UI_LANGUAGE == "ua" else "ru")
-    now = time.time()
-    if (
-        not force and _WEATHER_CACHE.get("location") and _WEATHER_CACHE.get("weather") and
-        now - float(_WEATHER_CACHE.get("created") or 0) < _WEATHER_CACHE_TTL
-    ):
-        report_key = "report_ua" if lang == "ua" else "report_ru"
-        report = _WEATHER_CACHE.get(report_key)
-        if not report:
-            report = _format_weather_report(_WEATHER_CACHE["location"], _WEATHER_CACHE["weather"], lang)
-            _WEATHER_CACHE[report_key] = report
-        return {"ok": True, "location": _WEATHER_CACHE["location"], "weather": _WEATHER_CACHE["weather"], "report": report, "cached": True}
-
+lang = lang or ("ua" if UI_LANGUAGE == "ua" else "ru")
+now = time.time()
+if (
+not force and _WEATHER_CACHE.get("location") and _WEATHER_CACHE.get("weather") and
+now - float(_WEATHER_CACHE.get("created") or 0) < _WEATHER_CACHE_TTL
+):
+report_key = "report_ua" if lang == "ua" else "report_ru"
+report = _WEATHER_CACHE.get(report_key)
+if not report:
+report = _format_weather_report(_WEATHER_CACHE["location"], _WEATHER_CACHE["weather"], lang)
+_WEATHER_CACHE[report_key] = report
+return {"ok": True, "location": _WEATHER_CACHE["location"], "weather": _WEATHER_CACHE["weather"], "report": report, "cached": True}
     try:
         location = _detect_location_by_ip()
         weather = _fetch_open_meteo(location["latitude"], location["longitude"])
@@ -1074,61 +1046,52 @@ def get_local_weather(force=False, lang=None):
         return {"ok": False, "error": msg, "details": str(e)}
 
 def is_weather_request(text: str):
-    s = str(text or "").lower()
-    keys = [
-        "погода", "температура на улице", "температура на вулиці",
-        "сколько градусов", "скільки градусів", "что на улице", "що надворі",
-        "дождь сейчас", "дощ зараз", "какая температура", "яка температура"
-    ]
-    return any(k in s for k in keys)
-
-# Пути для поиска cookies
+s = str(text or "").lower()
+keys = [
+"погода", "температура на улице", "температура на вулиці",
+"сколько градусов", "скільки градусів", "что на улице", "що надворі",
+"дождь сейчас", "дощ зараз", "какая температура", "яка температура"
+]
+return any(k in s for k in keys)
+Пути для поиска cookies
 COOKIES_DIR = os.path.join(BASE_DIR, "YouCookie")
 COOKIE_FILE = os.path.join(COOKIES_DIR, "cookie.txt")
 COOKIES_FILE = os.path.join(COOKIES_DIR, "cookies.txt")
-
-# Функция поиска cookies
+Функция поиска cookies
 def find_cookie_file():
-    """Ищет файл cookies в папке YouCookie"""
-    if os.path.exists(COOKIE_FILE) and os.path.getsize(COOKIE_FILE) > 0:
-        return COOKIE_FILE
-    elif os.path.exists(COOKIES_FILE) and os.path.getsize(COOKIES_FILE) > 0:
-        return COOKIES_FILE
-    return None
-
-# Функция проверки наличия cookies
+"""Ищет файл cookies в папке YouCookie"""
+if os.path.exists(COOKIE_FILE) and os.path.getsize(COOKIE_FILE) > 0:
+return COOKIE_FILE
+elif os.path.exists(COOKIES_FILE) and os.path.getsize(COOKIES_FILE) > 0:
+return COOKIES_FILE
+return None
+Функция проверки наличия cookies
 def has_cookies():
-    return find_cookie_file() is not None
-
+return find_cookie_file() is not None
 def get_cookie_path():
-    return find_cookie_file()
-
-# ============================================================
-# ПЕРЕМЕННЫЕ ДЛЯ ВИЗУАЛИЗАЦИИ
-# ============================================================
+return find_cookie_file()
+============================================================
+ПЕРЕМЕННЫЕ ДЛЯ ВИЗУАЛИЗАЦИИ
+============================================================
 _is_music_mode = False
 _music_particles = []
 _music_stars = []
 _music_phase = 0.0
 _music_intensity = 0.0
 _music_beat_time = 0
-
-# ============================================================
-# ПЕРЕМЕННЫЕ ДЛЯ ГРОМКОСТИ МУЗЫКИ
-# ============================================================
+============================================================
+ПЕРЕМЕННЫЕ ДЛЯ ГРОМКОСТИ МУЗЫКИ
+============================================================
 _music_volume = 100
-
-# ============================================================
-# НАСТРОЙКИ ЯЗЫКА ИНТЕРФЕЙСА
-# ============================================================
+============================================================
+НАСТРОЙКИ ЯЗЫКА ИНТЕРФЕЙСА
+============================================================
 UI_LANGUAGE = "ru"
 UI_LANG_FILE = os.path.join(BASE_DIR, "mita_ui_lang.json")
-
-# Голоса для разных языков
+Голоса для разных языков
 TTS_VOICE_RU = "ru-RU-SvetlanaNeural"
 TTS_VOICE_UA = "uk-UA-PolinaNeural"
 TTS_VOICE_DEFAULT = TTS_VOICE_RU
-
 TTS_RATE = "-5%"
 TTS_PITCH = "+2Hz"
 TTS_VOLUME = 1.0
@@ -1136,259 +1099,243 @@ TTS_FILE = os.path.join(BASE_DIR, "mita_tts.mp3")
 _tts_lock = threading.Lock()
 _tts_pygame_ready = False
 _tts_stop_requested = False
-
 def get_ui_language():
-    global UI_LANGUAGE
-    return UI_LANGUAGE
-
+global UI_LANGUAGE
+return UI_LANGUAGE
 def set_ui_language(lang: str):
-    global UI_LANGUAGE
-    if lang in ["ru", "ua"]:
-        UI_LANGUAGE = lang
-        _save_ui_language()
-        return True
-    return False
-
+global UI_LANGUAGE
+if lang in ["ru", "ua"]:
+UI_LANGUAGE = lang
+_save_ui_language()
+return True
+return False
 def _save_ui_language():
-    try:
-        with open(UI_LANG_FILE, "w", encoding="utf-8") as f:
-            json.dump({"language": UI_LANGUAGE}, f)
-    except:
-        pass
-
+try:
+with open(UI_LANG_FILE, "w", encoding="utf-8") as f:
+json.dump({"language": UI_LANGUAGE}, f)
+except:
+pass
 def _load_ui_language():
-    global UI_LANGUAGE
-    try:
-        if os.path.exists(UI_LANG_FILE):
-            with open(UI_LANG_FILE, "r", encoding="utf-8") as f:
-                data = json.load(f)
-                if data.get("language") in ["ru", "ua"]:
-                    UI_LANGUAGE = data["language"]
-                    return
-    except:
-        pass
-    UI_LANGUAGE = "ru"
-
-# ============================================================
-# ТЕКСТЫ ИНТЕРФЕЙСА НА ДВУХ ЯЗЫКАХ
-# ============================================================
+global UI_LANGUAGE
+try:
+if os.path.exists(UI_LANG_FILE):
+with open(UI_LANG_FILE, "r", encoding="utf-8") as f:
+data = json.load(f)
+if data.get("language") in ["ru", "ua"]:
+UI_LANGUAGE = data["language"]
+return
+except:
+pass
+UI_LANGUAGE = "ru"
+============================================================
+ТЕКСТЫ ИНТЕРФЕЙСА НА ДВУХ ЯЗЫКАХ
+============================================================
 def T(key: str) -> str:
-    texts = {
-        "app_title": {"ru": "MITA AI - Голосовой Ассистент", "ua": "MITA AI - Голосовий Асистент"},
-        "online": {"ru": "ONLINE", "ua": "ОНЛАЙН"},
-        "control_center": {"ru": "CONTROL CENTER", "ua": "ЦЕНТР КЕРУВАННЯ"},
-        "nav_main": {"ru": "Главная", "ua": "Головна"},
-        "nav_chat": {"ru": "Чат", "ua": "Чат"},
-        "nav_commands": {"ru": "Команды", "ua": "Команди"},
-        "nav_settings": {"ru": "Настройки", "ua": "Налаштування"},
-        "voice_engine": {"ru": "VOICE ENGINE", "ua": "ГОЛОСОВИЙ РУШІЙ"},
-        "hotword": {"ru": "HOTWORD", "ua": "КЛЮЧОВЕ СЛОВО"},
-        "mode": {"ru": "РЕЖИМ РАБОТЫ", "ua": "РЕЖИМ РОБОТИ"},
-        "change_mode": {"ru": "🔄 Сменить режим", "ua": "🔄 Змінити режим"},
-        "manual_input": {"ru": "РУЧНОЙ ВВОД", "ua": "РУЧНЕ ВВЕДЕННЯ"},
-        "manual_input_btn": {"ru": "🎤 НАЖМИТЕ И ГОВОРИТЕ", "ua": "🎤 НАТИСНІТЬ І ГОВОРІТЬ"},
-        "stop_record": {"ru": "⏹ ОСТАНОВИТЬ ЗАПИСЬ", "ua": "⏹ ЗУПИНИТИ ЗАПИС"},
-        "mita_voice": {"ru": "ГОЛОС МИТЫ", "ua": "ГОЛОС МІТИ"},
-        "voice_on": {"ru": "🔊 ВКЛЮЧЕН", "ua": "🔊 УВІМКНЕНО"},
-        "voice_off": {"ru": "🔇 ВЫКЛЮЧЕН", "ua": "🔇 ВИМКНЕНО"},
-        "text_corrector": {"ru": "ИСПРАВИТЕЛЬ ТЕКСТА", "ua": "ВИПРАВЛЯЧ ТЕКСТУ"},
-        "corrector_on": {"ru": "🟢 ВКЛЮЧЕН ⌨️", "ua": "🟢 УВІМКНЕНО ⌨️"},
-        "corrector_off": {"ru": "⚪ ВЫКЛЮЧЕН", "ua": "⚪ ВИМКНЕНО"},
-        "volume": {"ru": "ГРОМКОСТЬ", "ua": "ГУЧНІСТЬ"},
-        "change_key": {"ru": "🔄 Сменить ключ", "ua": "🔄 Змінити ключ"},
-        "no_key": {"ru": "🔑 Нет ключа", "ua": "🔑 Немає ключа"},
-        "music_stop": {"ru": "⏹️ МУЗЫКА НЕ ИГРАЕТ", "ua": "⏹️ МУЗИКА НЕ ГРАЄ"},
-        "music_stop_click": {"ru": "⏹️ ОСТАНОВИТЬ МУЗЫКУ", "ua": "⏹️ ЗУПИНИТИ МУЗИКУ"},
-        "percent": {"ru": "%", "ua": "%"},
-        "chat_with_mita": {"ru": "💬 ЧАТ С МИТОЙ", "ua": "💬 ЧАТ З МІТОЮ"},
-        "chat_hint": {"ru": "Введите текст или скажите голосом (правый клик для копирования, Ctrl+V для вставки)",
-                      "ua": "Введіть текст або скажіть голосом (правий клік для копіювання, Ctrl+V для вставки)"},
-        "commands_title": {"ru": "Команды Миты", "ua": "Команди Міти"},
-        "cmd_launch": {"ru": "Запусти", "ua": "Запусти"},
-        "cmd_open": {"ru": "Открой", "ua": "Відкрий"},
-        "cmd_close": {"ru": "Закрой", "ua": "Закрий"},
-        "cmd_write": {"ru": "Напиши", "ua": "Напиши"},
-        "cmd_minimize": {"ru": "Сверни", "ua": "Згорни"},
-        "cmd_screenshot": {"ru": "Скриншот", "ua": "Скріншот"},
-        "cmd_copy": {"ru": "Скопируй", "ua": "Скопіюй"},
-        "cmd_paste": {"ru": "Вставь", "ua": "Встав"},
-        "cmd_lang": {"ru": "Смени язык", "ua": "Зміни мову"},
-        "cmd_click": {"ru": "Клик", "ua": "Клік"},
-        "cmd_move": {"ru": "Переведи", "ua": "Переведи"},
-        "cmd_song": {"ru": "Песня", "ua": "Пісня"},
-        "cmd_stop_music": {"ru": "Стоп музыка", "ua": "Стоп музика"},
-        "cmd_louder": {"ru": "Громче", "ua": "Гучніше"},
-        "cmd_quieter": {"ru": "Тише", "ua": "Тихіше"},
-        "cmd_volume": {"ru": "Громкость", "ua": "Гучність"},
-        "ready": {"ru": "✧ ГОТОВА К РАБОТЕ ✧", "ua": "✧ ГОТОВА ДО РОБОТИ ✧"},
-        "listening": {"ru": "♪ СЛУШАЮ ВАС... ♪", "ua": "♪ СЛУХАЮ ВАС... ♪"},
-        "processing": {"ru": "✦ ОБРАБОТКА... ✦", "ua": "✦ ОБРОБКА... ✦"},
-        "manual_recording": {"ru": "🎤 РУЧНАЯ ЗАПИСЬ...", "ua": "🎤 РУЧНЕ ЗАПИС..."},
-        "voice_off_status": {"ru": "🔇 Голос отключен", "ua": "🔇 Голос вимкнено"},
-        "waiting": {"ru": "Ожидаю голосовую команду", "ua": "Очікую голосову команду"},
-        "listening_sub": {"ru": "Говорите — Стелла распознаёт голос", "ua": "Говоріть — Стелла розпізнає голос"},
-        "processing_sub": {"ru": "Выполняю вашу команду", "ua": "Виконую вашу команду"},
-        "manual_sub": {"ru": "Говорите, я слушаю...", "ua": "Говоріть, я слухаю..."},
-        "hello": {"ru": "Привет! Я Мита, твой голосовой ассистент ✨", "ua": "Привіт! Я Міта, твій голосовий асистент ✨"},
-        "corrector_info": {"ru": "📝 Исправитель текста: ", "ua": "📝 Виправляч тексту: "},
-        "corrector_on_info": {"ru": "ВКЛЮЧЕН ⌨️", "ua": "УВІМКНЕНО ⌨️"},
-        "corrector_off_info": {"ru": "ВЫКЛЮЧЕН", "ua": "ВИМКНЕНО"},
-        "lang_hint": {"ru": "Говори на русском или украинском - я пойму! 💕", "ua": "Кажи російською або українською - я зрозумію! 💕"},
-        "mode_system": {"ru": "🔧 Только система", "ua": "🔧 Тільки система"},
-        "mode_ai": {"ru": "🤖 Только ИИ", "ua": "🤖 Тільки ШІ"},
-        "mode_all": {"ru": "🌟 Все вместе", "ua": "🌟 Все разом"},
-        "mita_greeting": {"ru": "Привет! Я Мита, твой голосовой ассистент ✨", "ua": "Привіт! Я Міта, твій голосовий асистент ✨"},
-        "mita_mode": {"ru": "Текущий режим: ", "ua": "Поточний режим: "},
-        "mita_corrector": {"ru": "📝 Исправитель текста: ", "ua": "📝 Виправляч тексту: "},
-        "mita_lang": {"ru": "Говори на русском или украинском - я пойму! 💕", "ua": "Кажи російською або українською - я зрозумію! 💕"},
-        "mita_help": {"ru": "Скажи «Стелла» + команда или нажми кнопки в левой панели! 💕", "ua": "Скажи «Стелла» + команда або натисни кнопки в лівій панелі! 💕"},
-        "settings_title": {"ru": "⚙ НАСТРОЙКИ", "ua": "⚙ НАЛАШТУВАННЯ"},
-        "settings_language": {"ru": "🌍 ЯЗЫК ИНТЕРФЕЙСА", "ua": "🌍 МОВА ІНТЕРФЕЙСУ"},
-        "lang_ru": {"ru": "🇷🇺 Русский", "ua": "🇷🇺 Російська"},
-        "lang_ua": {"ru": "🇺🇦 Украинский", "ua": "🇺🇦 Українська"},
-        "apply": {"ru": "ПРИМЕНИТЬ", "ua": "ЗАСТОСУВАТИ"},
-        "error": {"ru": "❌ Ошибка: ", "ua": "❌ Помилка: "},
-        "command_not_found": {"ru": "❌ Команда не распознана.", "ua": "❌ Команду не розпізнано."},
-        "hello_response_ru": {"ru": "Привет! Что нужно запустить или открыть?", "ua": "Привіт! Що потрібно запустити або відкрити?"},
-        "hello_response_ua": {"ru": "Привет! Что нужно запустить или открыть?", "ua": "Привіт! Що потрібно запустити або відкрити?"},
-        "how_are_you": {"ru": "Все отлично, готова к работе!", "ua": "Все добре, готова до роботи!"},
-        "im_here": {"ru": "Я здесь! Слушаю вас.", "ua": "Я тут! Слухаю вас."},
-        "im_always_here": {"ru": "Я всегда на связи!", "ua": "Я завжди на зв'язку!"},
-        "music_stopped": {"ru": "🎵 Музыка остановлена", "ua": "🎵 Музику зупинено"},
-        "music_playing": {"ru": "🎵 Ищу: ", "ua": "🎵 Шукаю: "},
-        "typing": {"ru": "✏️ Напечатано!", "ua": "✏️ Надруковано!"},
-        "typing_corrected": {"ru": "✏️ Исправлено и напечатано", "ua": "✏️ Виправлено та надруковано"},
-        "typed": {"ru": "✏️ Напечатал: ", "ua": "✏️ Надрукував: "},
-        "minimized_all": {"ru": "✨ Все окна свернуты", "ua": "✨ Усі вікна згорнуто"},
-        "screenshot_done": {"ru": "📸 Скриншот сделан", "ua": "📸 Скріншот зроблено"},
-        "copied": {"ru": "📋 Скопировано", "ua": "📋 Скопійовано"},
-        "pasted": {"ru": "📎 Вставлено", "ua": "📎 Вставлено"},
-        "language_changed": {"ru": "💬 Язык изменен", "ua": "💬 Мову змінено"},
-        "executed": {"ru": "✅ Выполнено", "ua": "✅ Виконано"},
-        "shutting_up": {"ru": "Хорошо, я замолкаю 🤐", "ua": "Добре, я замовкаю 🤐"},
-        "command_not_found_text": {"ru": "❌ Команда не распознана.", "ua": "❌ Команду не розпізнано."},
-        "window_moved": {"ru": "✅ Окно перемещено на {} монитор", "ua": "✅ Вікно переміщено на {} монітор"},
-        "window_move_failed": {"ru": "❌ Не удалось переместить окно", "ua": "❌ Не вдалося перемістити вікно"},
-        "no_active_window": {"ru": "❌ Нет активного окна для перемещения", "ua": "❌ Немає активного вікна для переміщення"},
-        "move_to_monitor_ask": {"ru": "На какой монитор перевести? Скажи 1 или 2", "ua": "На який монітор перевести? Скажи 1 або 2"},
-        "app_launching": {"ru": "✅ Запускаю {}", "ua": "✅ Запускаю {}"},
-        "app_not_found": {"ru": "❌ Не удалось найти {}", "ua": "❌ Не вдалося знайти {}"},
-        "web_opening": {"ru": "🌐 Открываю {}", "ua": "🌐 Відкриваю {}"},
-        "app_closing": {"ru": "✅ Закрываю {}", "ua": "✅ Закриваю {}"},
-        "app_close_failed": {"ru": "❌ Не удалось закрыть {}", "ua": "❌ Не вдалося закрити {}"},
-        "typing_corrected_msg": {"ru": "📝 Исправлено: '{}' → '{}'", "ua": "📝 Виправлено: '{}' → '{}'"},
-        "typing_writing": {"ru": "✏️ Напиши: {}", "ua": "✏️ Напиши: {}"},
-        "volume_text": {"ru": "Громкость {}%", "ua": "Гучність {}%"},
-        "volume_up": {"ru": "🔊 Громкость: {}%", "ua": "🔊 Гучність: {}%"},
-        "volume_down": {"ru": "🔉 Громкость: {}%", "ua": "🔉 Гучність: {}%"},
-        "no_audio": {"ru": "❌ Ничего не записано. Попробуйте снова.", "ua": "❌ Нічого не записано. Спробуйте ще раз."},
-        "no_data": {"ru": "❌ Нет данных для распознавания", "ua": "❌ Немає даних для розпізнавання"},
-        "recognition_failed": {"ru": "❌ Не удалось распознать речь. Попробуйте еще раз.", "ua": "❌ Не вдалося розпізнати мову. Спробуйте ще раз."},
-        "corrector_on_text": {"ru": "Исправитель текста включен", "ua": "Виправляч тексту увімкнено"},
-        "corrector_off_text": {"ru": "Исправитель текста выключен", "ua": "Виправляч тексту вимкнено"},
-        "voice_on_text": {"ru": "Голос включен", "ua": "Голос увімкнено"},
-        "voice_off_text": {"ru": "Голос отключен", "ua": "Голос вимкнено"},
-        "mode_changed": {"ru": "🔄 Режим изменен на: {}", "ua": "🔄 Режим змінено на: {}"},
-        "mode_changed_text": {"ru": "Режим изменен на {}", "ua": "Режим змінено на {}"},
-        "lang_changed": {"ru": "🌍 Язык интерфейса изменен на Русский", "ua": "🌍 Мову інтерфейсу змінено на Українську"},
-        "chat_cleared": {"ru": "✨ Чат очищен. Чем могу помочь?", "ua": "✨ Чат очищено. Чим можу допомогти?"},
-        "copy_success": {"ru": "✅ Скопировано!", "ua": "✅ Скопійовано!"},
-        "copy_failed": {"ru": "❌ Нет сообщений для копирования", "ua": "❌ Немає повідомлень для копіювання"},
-        "copy_all_success": {"ru": "✅ Весь чат скопирован!", "ua": "✅ Весь чат скопійовано!"},
-        "chat_empty": {"ru": "❌ Чат пуст", "ua": "❌ Чат порожній"},
-        "clear_confirm": {"ru": "Вы уверены, что хотите очистить историю чата?", "ua": "Ви впевнені, що хочете очистити історію чату?"},
-        "key_change_confirm": {"ru": "Текущий ключ будет удален. Продолжить?", "ua": "Поточний ключ буде видалено. Продовжити?"},
-        "key_success": {"ru": "Ключ успешно изменен!", "ua": "Ключ успішно змінено!"},
-        "key_cancel": {"ru": "Смена ключа отменена", "ua": "Зміну ключа скасовано"},
-        "music_stopped_click": {"ru": "🎵 Музыка остановлена по кнопке", "ua": "🎵 Музику зупинено кнопкою"},
-        "music_stopped_voice": {"ru": "Музыка остановлена", "ua": "Музику зупинено"},
-        "moving_window": {"ru": "Переместила на {} монитор", "ua": "Перемістила на {} монітор"},
-        "move_failed": {"ru": "Не удалось переместить", "ua": "Не вдалося перемістити"},
-        "window_on_monitor": {"ru": "Окно на {} мониторе", "ua": "Вікно на {} моніторі"},
-        "error_text": {"ru": "❌ Ошибка: {}", "ua": "❌ Помилка: {}"},
-        "no_cookies": {"ru": "❌ Нет cookies для YouTube. Положите cookie.txt в папку YouCookie", "ua": "❌ Немає cookies для YouTube. Покладіть cookie.txt в папку YouCookie"},
-    }
-    result = texts.get(key, {})
-    if isinstance(result, dict):
-        return result.get(UI_LANGUAGE, result.get("ru", key))
-    return result
-
-# ============================================================
-# РЕЖИМЫ РАБОТЫ МИТЫ
-# ============================================================
+texts = {
+"app_title": {"ru": "MITA AI - Голосовой Ассистент", "ua": "MITA AI - Голосовий Асистент"},
+"online": {"ru": "ONLINE", "ua": "ОНЛАЙН"},
+"control_center": {"ru": "CONTROL CENTER", "ua": "ЦЕНТР КЕРУВАННЯ"},
+"nav_main": {"ru": "Главная", "ua": "Головна"},
+"nav_chat": {"ru": "Чат", "ua": "Чат"},
+"nav_commands": {"ru": "Команды", "ua": "Команди"},
+"nav_settings": {"ru": "Настройки", "ua": "Налаштування"},
+"voice_engine": {"ru": "VOICE ENGINE", "ua": "ГОЛОСОВИЙ РУШІЙ"},
+"hotword": {"ru": "HOTWORD", "ua": "КЛЮЧОВЕ СЛОВО"},
+"mode": {"ru": "РЕЖИМ РАБОТЫ", "ua": "РЕЖИМ РОБОТИ"},
+"change_mode": {"ru": "🔄 Сменить режим", "ua": "🔄 Змінити режим"},
+"manual_input": {"ru": "РУЧНОЙ ВВОД", "ua": "РУЧНЕ ВВЕДЕННЯ"},
+"manual_input_btn": {"ru": "🎤 НАЖМИТЕ И ГОВОРИТЕ", "ua": "🎤 НАТИСНІТЬ І ГОВОРІТЬ"},
+"stop_record": {"ru": "⏹ ОСТАНОВИТЬ ЗАПИСЬ", "ua": "⏹ ЗУПИНИТИ ЗАПИС"},
+"mita_voice": {"ru": "ГОЛОС МИТЫ", "ua": "ГОЛОС МІТИ"},
+"voice_on": {"ru": "🔊 ВКЛЮЧЕН", "ua": "🔊 УВІМКНЕНО"},
+"voice_off": {"ru": "🔇 ВЫКЛЮЧЕН", "ua": "🔇 ВИМКНЕНО"},
+"text_corrector": {"ru": "ИСПРАВИТЕЛЬ ТЕКСТА", "ua": "ВИПРАВЛЯЧ ТЕКСТУ"},
+"corrector_on": {"ru": "🟢 ВКЛЮЧЕН ⌨️", "ua": "🟢 УВІМКНЕНО ⌨️"},
+"corrector_off": {"ru": "⚪ ВЫКЛЮЧЕН", "ua": "⚪ ВИМКНЕНО"},
+"volume": {"ru": "ГРОМКОСТЬ", "ua": "ГУЧНІСТЬ"},
+"change_key": {"ru": "🔄 Сменить ключ", "ua": "🔄 Змінити ключ"},
+"no_key": {"ru": "🔑 Нет ключа", "ua": "🔑 Немає ключа"},
+"music_stop": {"ru": "⏹️ МУЗЫКА НЕ ИГРАЕТ", "ua": "⏹️ МУЗИКА НЕ ГРАЄ"},
+"music_stop_click": {"ru": "⏹️ ОСТАНОВИТЬ МУЗЫКУ", "ua": "⏹️ ЗУПИНИТИ МУЗИКУ"},
+"percent": {"ru": "%", "ua": "%"},
+"chat_with_mita": {"ru": "💬 ЧАТ С МИТОЙ", "ua": "💬 ЧАТ З МІТОЮ"},
+"chat_hint": {"ru": "Введите текст или скажите голосом (правый клик для копирования, Ctrl+V для вставки)",
+"ua": "Введіть текст або скажіть голосом (правий клік для копіювання, Ctrl+V для вставки)"},
+"commands_title": {"ru": "Команды Миты", "ua": "Команди Міти"},
+"cmd_launch": {"ru": "Запусти", "ua": "Запусти"},
+"cmd_open": {"ru": "Открой", "ua": "Відкрий"},
+"cmd_close": {"ru": "Закрой", "ua": "Закрий"},
+"cmd_write": {"ru": "Напиши", "ua": "Напиши"},
+"cmd_minimize": {"ru": "Сверни", "ua": "Згорни"},
+"cmd_screenshot": {"ru": "Скриншот", "ua": "Скріншот"},
+"cmd_copy": {"ru": "Скопируй", "ua": "Скопіюй"},
+"cmd_paste": {"ru": "Вставь", "ua": "Встав"},
+"cmd_lang": {"ru": "Смени язык", "ua": "Зміни мову"},
+"cmd_click": {"ru": "Клик", "ua": "Клік"},
+"cmd_move": {"ru": "Переведи", "ua": "Переведи"},
+"cmd_song": {"ru": "Песня", "ua": "Пісня"},
+"cmd_stop_music": {"ru": "Стоп музыка", "ua": "Стоп музика"},
+"cmd_louder": {"ru": "Громче", "ua": "Гучніше"},
+"cmd_quieter": {"ru": "Тише", "ua": "Тихіше"},
+"cmd_volume": {"ru": "Громкость", "ua": "Гучність"},
+"ready": {"ru": "✧ ГОТОВА К РАБОТЕ ✧", "ua": "✧ ГОТОВА ДО РОБОТИ ✧"},
+"listening": {"ru": "♪ СЛУШАЮ ВАС... ♪", "ua": "♪ СЛУХАЮ ВАС... ♪"},
+"processing": {"ru": "✦ ОБРАБОТКА... ✦", "ua": "✦ ОБРОБКА... ✦"},
+"manual_recording": {"ru": "🎤 РУЧНАЯ ЗАПИСЬ...", "ua": "🎤 РУЧНЕ ЗАПИС..."},
+"voice_off_status": {"ru": "🔇 Голос отключен", "ua": "🔇 Голос вимкнено"},
+"waiting": {"ru": "Ожидаю голосовую команду", "ua": "Очікую голосову команду"},
+"listening_sub": {"ru": "Говорите — Стелла распознаёт голос", "ua": "Говоріть — Стелла розпізнає голос"},
+"processing_sub": {"ru": "Выполняю вашу команду", "ua": "Виконую вашу команду"},
+"manual_sub": {"ru": "Говорите, я слушаю...", "ua": "Говоріть, я слухаю..."},
+"hello": {"ru": "Привет! Я Мита, твой голосовой ассистент ✨", "ua": "Привіт! Я Міта, твій голосовий асистент ✨"},
+"corrector_info": {"ru": "📝 Исправитель текста: ", "ua": "📝 Виправляч тексту: "},
+"corrector_on_info": {"ru": "ВКЛЮЧЕН ⌨️", "ua": "УВІМКНЕНО ⌨️"},
+"corrector_off_info": {"ru": "ВЫКЛЮЧЕН", "ua": "ВИМКНЕНО"},
+"lang_hint": {"ru": "Говори на русском или украинском - я пойму! 💕", "ua": "Кажи російською або українською - я зрозумію! 💕"},
+"mode_system": {"ru": "🔧 Только система", "ua": "🔧 Тільки система"},
+"mode_ai": {"ru": "🤖 Только ИИ", "ua": "🤖 Тільки ШІ"},
+"mode_all": {"ru": "🌟 Все вместе", "ua": "🌟 Все разом"},
+"mita_greeting": {"ru": "Привет! Я Мита, твой голосовой ассистент ✨", "ua": "Привіт! Я Міта, твій голосовий асистент ✨"},
+"mita_mode": {"ru": "Текущий режим: ", "ua": "Поточний режим: "},
+"mita_corrector": {"ru": "📝 Исправитель текста: ", "ua": "📝 Виправляч тексту: "},
+"mita_lang": {"ru": "Говори на русском или украинском - я пойму! 💕", "ua": "Кажи російською або українською - я зрозумію! 💕"},
+"mita_help": {"ru": "Скажи «Стелла» + команда или нажми кнопки в левой панели! 💕", "ua": "Скажи «Стелла» + команда або натисни кнопки в лівій панелі! 💕"},
+"settings_title": {"ru": "⚙ НАСТРОЙКИ", "ua": "⚙ НАЛАШТУВАННЯ"},
+"settings_language": {"ru": "🌍 ЯЗЫК ИНТЕРФЕЙСА", "ua": "🌍 МОВА ІНТЕРФЕЙСУ"},
+"lang_ru": {"ru": "🇷🇺 Русский", "ua": "🇷🇺 Російська"},
+"lang_ua": {"ru": "🇺🇦 Украинский", "ua": "🇺🇦 Українська"},
+"apply": {"ru": "ПРИМЕНИТЬ", "ua": "ЗАСТОСУВАТИ"},
+"error": {"ru": "❌ Ошибка: ", "ua": "❌ Помилка: "},
+"command_not_found": {"ru": "❌ Команда не распознана.", "ua": "❌ Команду не розпізнано."},
+"hello_response_ru": {"ru": "Привет! Что нужно запустить или открыть?", "ua": "Привіт! Що потрібно запустити або відкрити?"},
+"hello_response_ua": {"ru": "Привет! Что нужно запустить или открыть?", "ua": "Привіт! Що потрібно запустити або відкрити?"},
+"how_are_you": {"ru": "Все отлично, готова к работе!", "ua": "Все добре, готова до роботи!"},
+"im_here": {"ru": "Я здесь! Слушаю вас.", "ua": "Я тут! Слухаю вас."},
+"im_always_here": {"ru": "Я всегда на связи!", "ua": "Я завжди на зв'язку!"},
+"music_stopped": {"ru": "🎵 Музыка остановлена", "ua": "🎵 Музику зупинено"},
+"music_playing": {"ru": "🎵 Ищу: ", "ua": "🎵 Шукаю: "},
+"typing": {"ru": "✏️ Напечатано!", "ua": "✏️ Надруковано!"},
+"typing_corrected": {"ru": "✏️ Исправлено и напечатано", "ua": "✏️ Виправлено та надруковано"},
+"typed": {"ru": "✏️ Напечатал: ", "ua": "✏️ Надрукував: "},
+"minimized_all": {"ru": "✨ Все окна свернуты", "ua": "✨ Усі вікна згорнуто"},
+"screenshot_done": {"ru": "📸 Скриншот сделан", "ua": "📸 Скріншот зроблено"},
+"copied": {"ru": "📋 Скопировано", "ua": "📋 Скопійовано"},
+"pasted": {"ru": "📎 Вставлено", "ua": "📎 Вставлено"},
+"language_changed": {"ru": "💬 Язык изменен", "ua": "💬 Мову змінено"},
+"executed": {"ru": "✅ Выполнено", "ua": "✅ Виконано"},
+"shutting_up": {"ru": "Хорошо, я замолкаю 🤐", "ua": "Добре, я замовкаю 🤐"},
+"command_not_found_text": {"ru": "❌ Команда не распознана.", "ua": "❌ Команду не розпізнано."},
+"window_moved": {"ru": "✅ Окно перемещено на {} монитор", "ua": "✅ Вікно переміщено на {} монітор"},
+"window_move_failed": {"ru": "❌ Не удалось переместить окно", "ua": "❌ Не вдалося перемістити вікно"},
+"no_active_window": {"ru": "❌ Нет активного окна для перемещения", "ua": "❌ Немає активного вікна для переміщення"},
+"move_to_monitor_ask": {"ru": "На какой монитор перевести? Скажи 1 или 2", "ua": "На який монітор перевести? Скажи 1 або 2"},
+"app_launching": {"ru": "✅ Запускаю {}", "ua": "✅ Запускаю {}"},
+"app_not_found": {"ru": "❌ Не удалось найти {}", "ua": "❌ Не вдалося знайти {}"},
+"web_opening": {"ru": "🌐 Открываю {}", "ua": "🌐 Відкриваю {}"},
+"app_closing": {"ru": "✅ Закрываю {}", "ua": "✅ Закриваю {}"},
+"app_close_failed": {"ru": "❌ Не удалось закрыть {}", "ua": "❌ Не вдалося закрити {}"},
+"typing_corrected_msg": {"ru": "📝 Исправлено: '{}' → '{}'", "ua": "📝 Виправлено: '{}' → '{}'"},
+"typing_writing": {"ru": "✏️ Напиши: {}", "ua": "✏️ Напиши: {}"},
+"volume_text": {"ru": "Громкость {}%", "ua": "Гучність {}%"},
+"volume_up": {"ru": "🔊 Громкость: {}%", "ua": "🔊 Гучність: {}%"},
+"volume_down": {"ru": "🔉 Громкость: {}%", "ua": "🔉 Гучність: {}%"},
+"no_audio": {"ru": "❌ Ничего не записано. Попробуйте снова.", "ua": "❌ Нічого не записано. Спробуйте ще раз."},
+"no_data": {"ru": "❌ Нет данных для распознавания", "ua": "❌ Немає даних для розпізнавання"},
+"recognition_failed": {"ru": "❌ Не удалось распознать речь. Попробуйте еще раз.", "ua": "❌ Не вдалося розпізнати мову. Спробуйте ще раз."},
+"corrector_on_text": {"ru": "Исправитель текста включен", "ua": "Виправляч тексту увімкнено"},
+"corrector_off_text": {"ru": "Исправитель текста выключен", "ua": "Виправляч тексту вимкнено"},
+"voice_on_text": {"ru": "Голос включен", "ua": "Голос увімкнено"},
+"voice_off_text": {"ru": "Голос отключен", "ua": "Голос вимкнено"},
+"mode_changed": {"ru": "🔄 Режим изменен на: {}", "ua": "🔄 Режим змінено на: {}"},
+"mode_changed_text": {"ru": "Режим изменен на {}", "ua": "Режим змінено на {}"},
+"lang_changed": {"ru": "🌍 Язык интерфейса изменен на Русский", "ua": "🌍 Мову інтерфейсу змінено на Українську"},
+"chat_cleared": {"ru": "✨ Чат очищен. Чем могу помочь?", "ua": "✨ Чат очищено. Чим можу допомогти?"},
+"copy_success": {"ru": "✅ Скопировано!", "ua": "✅ Скопійовано!"},
+"copy_failed": {"ru": "❌ Нет сообщений для копирования", "ua": "❌ Немає повідомлень для копіювання"},
+"copy_all_success": {"ru": "✅ Весь чат скопирован!", "ua": "✅ Весь чат скопійовано!"},
+"chat_empty": {"ru": "❌ Чат пуст", "ua": "❌ Чат порожній"},
+"clear_confirm": {"ru": "Вы уверены, что хотите очистить историю чата?", "ua": "Ви впевнені, що хочете очистити історію чату?"},
+"key_change_confirm": {"ru": "Текущий ключ будет удален. Продолжить?", "ua": "Поточний ключ буде видалено. Продовжити?"},
+"key_success": {"ru": "Ключ успешно изменен!", "ua": "Ключ успішно змінено!"},
+"key_cancel": {"ru": "Смена ключа отменена", "ua": "Зміну ключа скасовано"},
+"music_stopped_click": {"ru": "🎵 Музыка остановлена по кнопке", "ua": "🎵 Музику зупинено кнопкою"},
+"music_stopped_voice": {"ru": "Музыка остановлена", "ua": "Музику зупинено"},
+"moving_window": {"ru": "Переместила на {} монитор", "ua": "Перемістила на {} монітор"},
+"move_failed": {"ru": "Не удалось переместить", "ua": "Не вдалося перемістити"},
+"window_on_monitor": {"ru": "Окно на {} мониторе", "ua": "Вікно на {} моніторі"},
+"error_text": {"ru": "❌ Ошибка: {}", "ua": "❌ Помилка: {}"},
+"no_cookies": {"ru": "❌ Нет cookies для YouTube. Положите cookie.txt в папку YouCookie", "ua": "❌ Немає cookies для YouTube. Покладіть cookie.txt в папку YouCookie"},
+}
+result = texts.get(key, {})
+if isinstance(result, dict):
+return result.get(UI_LANGUAGE, result.get("ru", key))
+return result
+============================================================
+РЕЖИМЫ РАБОТЫ МИТЫ
+============================================================
 MODE_SYSTEM = "system"
 MODE_AI = "ai"
 MODE_ALL = "all"
 _mita_mode = MODE_ALL
-
 def set_mita_mode(mode: str):
-    global _mita_mode
-    if mode in [MODE_SYSTEM, MODE_AI, MODE_ALL]:
-        _mita_mode = mode
-        return True
-    return False
-
+global _mita_mode
+if mode in [MODE_SYSTEM, MODE_AI, MODE_ALL]:
+_mita_mode = mode
+return True
+return False
 def get_mita_mode():
-    return _mita_mode
-
+return _mita_mode
 def get_mode_name(mode: str):
-    if mode == MODE_SYSTEM:
-        return T("mode_system")
-    elif mode == MODE_AI:
-        return T("mode_ai")
-    else:
-        return T("mode_all")
-
+if mode == MODE_SYSTEM:
+return T("mode_system")
+elif mode == MODE_AI:
+return T("mode_ai")
+else:
+return T("mode_all")
 def detect_user_language(text: str) -> str:
-    if not text:
-        return UI_LANGUAGE if UI_LANGUAGE in ["ru", "ua"] else "ru"
-    text_lower = text.lower()
-    ua_chars = set('абвгґдеєжзиіїйклмнопрстуфхцчшщьюя')
-    ru_chars = set('абвгдеёжзийклмнопрстуфхцчшщъыьэюя')
-    ua_count = 0
-    ru_count = 0
-    for c in text_lower:
-        if c in ua_chars:
-            ua_count += 1
-        elif c in ru_chars and c not in ua_chars:
-            ru_count += 1
-    ua_markers = ['і', 'є', 'ї', 'ґ', 'привіт', 'спасибі', 'дякую', 'будь-ласка', 'так', 'ні']
-    ru_markers = ['привет', 'спасибо', 'пожалуйста', 'да', 'нет', 'хорошо']
-    for marker in ua_markers:
-        if marker in text_lower:
-            ua_count += 2
-    for marker in ru_markers:
-        if marker in text_lower:
-            ru_count += 2
-    if ua_count > ru_count:
-        return "ua"
-    elif ru_count > ua_count:
-        return "ru"
-    return UI_LANGUAGE if UI_LANGUAGE in ["ru", "ua"] else "ru"
-
+if not text:
+return UI_LANGUAGE if UI_LANGUAGE in ["ru", "ua"] else "ru"
+text_lower = text.lower()
+ua_chars = set('абвгґдеєжзиіїйклмнопрстуфхцчшщьюя')
+ru_chars = set('абвгдеёжзийклмнопрстуфхцчшщъыьэюя')
+ua_count = 0
+ru_count = 0
+for c in text_lower:
+if c in ua_chars:
+ua_count += 1
+elif c in ru_chars and c not in ua_chars:
+ru_count += 1
+ua_markers = ['і', 'є', 'ї', 'ґ', 'привіт', 'спасибі', 'дякую', 'будь-ласка', 'так', 'ні']
+ru_markers = ['привет', 'спасибо', 'пожалуйста', 'да', 'нет', 'хорошо']
+for marker in ua_markers:
+if marker in text_lower:
+ua_count += 2
+for marker in ru_markers:
+if marker in text_lower:
+ru_count += 2
+if ua_count > ru_count:
+return "ua"
+elif ru_count > ua_count:
+return "ru"
+return UI_LANGUAGE if UI_LANGUAGE in ["ru", "ua"] else "ru"
 def get_tts_voice(text: str) -> str:
-    if UI_LANGUAGE == "ua":
-        return TTS_VOICE_UA
-    return TTS_VOICE_RU
-
-# ============================================================
-# НАСТРОЙКИ - ИСПРАВИТЕЛЬ ТЕКСТА
-# ============================================================
+if UI_LANGUAGE == "ua":
+return TTS_VOICE_UA
+return TTS_VOICE_RU
+============================================================
+НАСТРОЙКИ - ИСПРАВИТЕЛЬ ТЕКСТА
+============================================================
 _text_corrector_enabled = False
-
 def set_text_corrector(enabled: bool):
-    global _text_corrector_enabled
-    _text_corrector_enabled = enabled
-    return _text_corrector_enabled
-
+global _text_corrector_enabled
+_text_corrector_enabled = enabled
+return _text_corrector_enabled
 def get_text_corrector():
-    return _text_corrector_enabled
-
+return _text_corrector_enabled
 def _local_text_cleanup(text: str) -> str:
-    """Безопасная локальная обработка, если ИИ временно недоступен."""
-    if not text:
-        return text
-
+"""Безопасная локальная обработка, если ИИ временно недоступен."""
+if not text:
+return text
     result = str(text).strip()
     result = re.sub(r'[ \t]+', ' ', result)
     result = re.sub(r'\s+([,.;:!?])', r'\1', result)
@@ -1403,11 +1350,11 @@ def _local_text_cleanup(text: str) -> str:
     return result
 
 
-def _clean_corrector_answer(answer: str) -> str:
-    """Убирает служебный текст/markdown, если модель всё же его добавила."""
-    if not answer:
-        return ""
 
+def _clean_corrector_answer(answer: str) -> str:
+"""Убирает служебный текст/markdown, если модель всё же его добавила."""
+if not answer:
+return ""
     result = str(answer).strip()
 
     # Удаляем markdown-кодовые блоки, но сохраняем их содержимое.
@@ -1433,10 +1380,10 @@ def _clean_corrector_answer(answer: str) -> str:
     return result.strip()
 
 
-def _language_score(text: str):
-    """Простая проверка RU/UA для контроля результата перевода."""
-    s = " " + re.sub(r"[^а-яёіїєґ\\s'-]", " ", str(text or "").lower()) + " "
 
+def _language_score(text: str):
+"""Простая проверка RU/UA для контроля результата перевода."""
+s = " " + re.sub(r"[^а-яёіїєґ\s'-]", " ", str(text or "").lower()) + " "
     ua_score = 0
     ru_score = 0
 
@@ -1466,11 +1413,11 @@ def _language_score(text: str):
     return ru_score, ua_score
 
 
-def _is_wrong_target_language(text: str, target_lang: str, source_text: str = "") -> bool:
-    """True, если результат явно остался на неправильном языке."""
-    ru, ua = _language_score(text)
-    src_ru, src_ua = _language_score(source_text)
 
+def _is_wrong_target_language(text: str, target_lang: str, source_text: str = "") -> bool:
+"""True, если результат явно остался на неправильном языке."""
+ru, ua = _language_score(text)
+src_ru, src_ua = _language_score(source_text)
     if target_lang == "ru":
         # Любые украинские уникальные буквы — недопустимы для русского результата.
         if any(ch in str(text).lower() for ch in "іїєґ"):
@@ -1492,12 +1439,12 @@ def _is_wrong_target_language(text: str, target_lang: str, source_text: str = ""
     return False
 
 
-def _finalize_ai_text(text: str, target_lang: str) -> str:
-    """Финальная страховка после ИИ: заглавная буква и конечный знак препинания."""
-    result = str(text or "").strip()
-    if not result:
-        return result
 
+def _finalize_ai_text(text: str, target_lang: str) -> str:
+"""Финальная страховка после ИИ: заглавная буква и конечный знак препинания."""
+result = str(text or "").strip()
+if not result:
+return result
     # Заглавная первая буквенная буква, не ломая emoji/кавычки/скобки в начале.
     chars = list(result)
     for i, ch in enumerate(chars):
@@ -1525,18 +1472,18 @@ def _finalize_ai_text(text: str, target_lang: str) -> str:
     return result
 
 
-def _process_text_for_language(text: str, correct_errors: bool = True) -> str:
-    """
-    ЖЁСТКАЯ языковая логика:
-    - выбран RU -> печатаем ТОЛЬКО по-русски;
-    - выбран UA -> печатаем ТОЛЬКО по-украински;
-    - если вход на другом языке, обязательно переводим;
-    - результат проверяется, и при неверном языке перевод повторяется.
-    """
-    original = str(text or "").strip()
-    if not original:
-        return original
 
+def _process_text_for_language(text: str, correct_errors: bool = True) -> str:
+"""
+ЖЁСТКАЯ языковая логика:
+- выбран RU -> печатаем ТОЛЬКО по-русски;
+- выбран UA -> печатаем ТОЛЬКО по-украински;
+- если вход на другом языке, обязательно переводим;
+- результат проверяется, и при неверном языке перевод повторяется.
+"""
+original = str(text or "").strip()
+if not original:
+return original
     fallback = _local_text_cleanup(original)
     target_lang = "ua" if get_ui_language() == "ua" else "ru"
     target_name = "УКРАИНСКИЙ" if target_lang == "ua" else "РУССКИЙ"
@@ -1563,7 +1510,6 @@ def _process_text_for_language(text: str, correct_errors: bool = True) -> str:
 
 КРИТИЧЕСКОЕ ТРЕБОВАНИЕ:
 ФИНАЛЬНЫЙ РЕЗУЛЬТАТ ДОЛЖЕН БЫТЬ ТОЛЬКО НА ЯЗЫКЕ: {target_name}.
-
 Если исходный текст на другом языке — ОБЯЗАТЕЛЬНО ПЕРЕВЕДИ ВЕСЬ ТЕКСТ НА {target_name}.
 Если исходный текст уже на {target_name} — сохрани этот язык.
 {correction}
@@ -1572,7 +1518,6 @@ def _process_text_for_language(text: str, correct_errors: bool = True) -> str:
 ВАЖНО: итог должен выглядеть как полностью грамотный готовый текст: первая буква предложения — заглавная, в конце — правильный знак препинания.
 Если это вопрос по смыслу — в конце ОБЯЗАТЕЛЬНО должен быть знак вопроса.
 Верни ТОЛЬКО готовый текст без кавычек, markdown и префиксов.{strict_note}"""
-
         try:
             completion = client.chat.completions.create(
                 model="openai/gpt-oss-120b",
@@ -1636,19 +1581,18 @@ def _process_text_for_language(text: str, correct_errors: bool = True) -> str:
     return fallback
 
 
-def correct_text(text: str) -> str:
-    """
-    Исправляет текст и одновременно приводит его к выбранному языку интерфейса.
-    RU -> всегда русский.
-    UA -> всегда украинский.
-    """
-    return _process_text_for_language(text, correct_errors=True)
 
+def correct_text(text: str) -> str:
+"""
+Исправляет текст и одновременно приводит его к выбранному языку интерфейса.
+RU -> всегда русский.
+UA -> всегда украинский.
+"""
+return _process_text_for_language(text, correct_errors=True)
 
 def prepare_text_for_typing(text: str) -> str:
-    """
-    Финальная подготовка текста перед печатью.
-
+"""
+Финальная подготовка текста перед печатью.
     Даже если исправитель выключен, выбранный язык всё равно соблюдается:
     - русский режим -> русский текст;
     - украинский режим -> украинский текст.
@@ -1661,12 +1605,12 @@ def prepare_text_for_typing(text: str) -> str:
     )
 
 
-def _get_clipboard_unicode():
-    """Читает текстовый буфер Windows. Возвращает None, если прочитать не удалось."""
-    try:
-        import ctypes
-        from ctypes import wintypes
 
+def _get_clipboard_unicode():
+"""Читает текстовый буфер Windows. Возвращает None, если прочитать не удалось."""
+try:
+import ctypes
+from ctypes import wintypes
         CF_UNICODETEXT = 13
         user32 = ctypes.windll.user32
         kernel32 = ctypes.windll.kernel32
@@ -1705,12 +1649,12 @@ def _get_clipboard_unicode():
         return None
 
 
-def _set_clipboard_unicode(value: str) -> bool:
-    """Надёжно помещает Unicode-текст в буфер Windows без сторонних библиотек."""
-    try:
-        import ctypes
-        from ctypes import wintypes
 
+def _set_clipboard_unicode(value: str) -> bool:
+"""Надёжно помещает Unicode-текст в буфер Windows без сторонних библиотек."""
+try:
+import ctypes
+from ctypes import wintypes
         CF_UNICODETEXT = 13
         GMEM_MOVEABLE = 0x0002
 
@@ -1778,15 +1722,15 @@ def _set_clipboard_unicode(value: str) -> bool:
         return False
 
 
-def type_unicode_text(text: str, restore_clipboard: bool = True) -> bool:
-    """
-    Печатает любой Unicode-текст в активное окно через буфер + Ctrl+V.
-    В отличие от keyboard.write(), корректно работает с русским/украинским.
-    """
-    value = str(text or "")
-    if not value:
-        return False
 
+def type_unicode_text(text: str, restore_clipboard: bool = True) -> bool:
+"""
+Печатает любой Unicode-текст в активное окно через буфер + Ctrl+V.
+В отличие от keyboard.write(), корректно работает с русским/украинским.
+"""
+value = str(text or "")
+if not value:
+return False
     old_clipboard = _get_clipboard_unicode() if restore_clipboard else None
 
     if not _set_clipboard_unicode(value):
@@ -1808,55 +1752,48 @@ def type_unicode_text(text: str, restore_clipboard: bool = True) -> bool:
         if restore_clipboard and old_clipboard is not None:
             _set_clipboard_unicode(old_clipboard)
 
-# ============================================================
-# ФУНКЦИИ ДЛЯ ВОСПРОИЗВЕДЕНИЯ ПЕСЕН (ИСПРАВЛЕННЫЕ)
-# ============================================================
-
+============================================================
+ФУНКЦИИ ДЛЯ ВОСПРОИЗВЕДЕНИЯ ПЕСЕН (ИСПРАВЛЕННЫЕ)
+============================================================
 _music_thread = None
 _music_stop = False
 _current_music_file = None
 _vlc_instance = None
 _vlc_player = None
 _current_track_title = ""
-
 def set_music_volume(percent: int):
-    global _music_volume, _vlc_player
-    _music_volume = max(0, min(200, percent))
-    if _vlc_player is not None:
-        try:
-            _vlc_player.audio_set_volume(_music_volume)
-            return True
-        except:
-            pass
-    return False
-
+global _music_volume, _vlc_player
+_music_volume = max(0, min(200, percent))
+if _vlc_player is not None:
+try:
+_vlc_player.audio_set_volume(_music_volume)
+return True
+except:
+pass
+return False
 def get_music_volume():
-    global _music_volume
-    return _music_volume
-
+global _music_volume
+return _music_volume
 def volume_up(interface=None):
-    result = set_music_volume(get_music_volume() + 10)
-    if interface:
-        interface.update_volume_display()
-        msg = T("volume_up").format(_music_volume)
-        interface.add_chat_message("Мита", msg, is_mita=True)
-        speak(msg, force=True)
-    return result
-
+result = set_music_volume(get_music_volume() + 10)
+if interface:
+interface.update_volume_display()
+msg = T("volume_up").format(_music_volume)
+interface.add_chat_message("Мита", msg, is_mita=True)
+speak(msg, force=True)
+return result
 def volume_down(interface=None):
-    result = set_music_volume(get_music_volume() - 10)
-    if interface:
-        interface.update_volume_display()
-        msg = T("volume_down").format(_music_volume)
-        interface.add_chat_message("Мита", msg, is_mita=True)
-        speak(msg, force=True)
-    return result
-
+result = set_music_volume(get_music_volume() - 10)
+if interface:
+interface.update_volume_display()
+msg = T("volume_down").format(_music_volume)
+interface.add_chat_message("Мита", msg, is_mita=True)
+speak(msg, force=True)
+return result
 def find_local_music(query: str) -> str:
-    _ensure_mita_apps_dir()
-    _build_mita_apps_index(force=True)
-    print(f"📁 Папка приложений Mita: {MITA_APPS_DIR}")
-
+_ensure_mita_apps_dir()
+_build_mita_apps_index(force=True)
+print(f"📁 Папка приложений Mita: {MITA_APPS_DIR}")
     music_dir = os.path.join(BASE_DIR, "music")
     if not os.path.exists(music_dir):
         try:
@@ -1880,8 +1817,7 @@ def find_local_music(query: str) -> str:
     return None
 
 def play_youtube_audio(query: str, interface=None):
-    global _music_thread, _music_stop, _current_music_file, _vlc_instance, _vlc_player, _current_track_title, _is_music_mode
-
+global _music_thread, _music_stop, _current_music_file, _vlc_instance, _vlc_player, _current_track_title, _is_music_mode
     if not HAS_YDL or not HAS_VLC:
         if interface:
             interface.add_chat_message("Мита", "❌ Нет yt-dlp или VLC", is_mita=True)
@@ -2016,8 +1952,7 @@ def play_youtube_audio(query: str, interface=None):
         return False
 
 def _play_audio_vlc(audio_url: str, title: str, interface=None):
-    global _music_thread, _music_stop, _vlc_instance, _vlc_player, _is_music_mode, _music_volume
-
+global _music_thread, _music_stop, _vlc_instance, _vlc_player, _is_music_mode, _music_volume
     try:
         _music_stop = False
         _is_music_mode = True
@@ -2098,29 +2033,26 @@ def _play_audio_vlc(audio_url: str, title: str, interface=None):
         return False
 
 def stop_music():
-    global _music_stop, _vlc_player, _is_music_mode, _music_intensity
-    _music_stop = True
-    _is_music_mode = False
-    _music_intensity = 0.0
-    try:
-        if _vlc_player is not None:
-            _vlc_player.stop()
-            _vlc_player.release()
-    except Exception:
-        pass
-    _vlc_player = None
-    return True
-
+global _music_stop, _vlc_player, _is_music_mode, _music_intensity
+_music_stop = True
+_is_music_mode = False
+_music_intensity = 0.0
+try:
+if _vlc_player is not None:
+_vlc_player.stop()
+_vlc_player.release()
+except Exception:
+pass
+_vlc_player = None
+return True
 def is_music_playing():
-    try:
-        return _vlc_player is not None and _vlc_player.get_state() == vlc.State.Playing
-    except Exception:
-        return False
-
+try:
+return _vlc_player is not None and _vlc_player.get_state() == vlc.State.Playing
+except Exception:
+return False
 def process_music_command(text: str, interface) -> bool:
-    global _music_volume
-    cleaned = text.lower().strip()
-
+global _music_volume
+cleaned = text.lower().strip()
     # Стоп музыка
     stop_phrases_ru = ['стоп музыка', 'выключи музыку', 'останови музыку', 'хватит музыки', 'прекрати музыку']
     stop_phrases_ua = ['стоп музика', 'вимкни музику', 'зупини музику', 'досить музики', 'припини музику']
@@ -2176,13 +2108,11 @@ def process_music_command(text: str, interface) -> bool:
 
     return False
 
-# ============================================================
-# TTS ФУНКЦИИ
-# ============================================================
-
+============================================================
+TTS ФУНКЦИИ
+============================================================
 def speak(text: str, force: bool = False):
-    global _tts_pygame_ready, _tts_stop_requested, TTS_VOLUME
-
+global _tts_pygame_ready, _tts_stop_requested, TTS_VOLUME
     try:
         if 'interface' in globals() and interface:
             if hasattr(interface, 'tts_muted') and interface.tts_muted:
@@ -2286,81 +2216,73 @@ def speak(text: str, force: bool = False):
     return True
 
 def stop_tts():
-    global _tts_stop_requested
-    _tts_stop_requested = True
-    try:
-        if _tts_pygame_ready:
-            pygame.mixer.music.stop()
-            return True
-    except:
-        pass
-    return False
+global _tts_stop_requested
+_tts_stop_requested = True
+try:
+if _tts_pygame_ready:
+pygame.mixer.music.stop()
+return True
+except:
+pass
+return False
 
-
-# ============================================================
-# MITA ULTRA INTELLIGENCE CORE
-# ============================================================
-
+============================================================
+MITA ULTRA INTELLIGENCE CORE
+============================================================
 _MITA_MEMORY_FILE = os.path.join(BASE_DIR, "mita_ai_memory.json")
 _MITA_DIALOG_MEMORY = []
 _MITA_APP_INDEX = None
 _MITA_APP_INDEX_TIME = 0.0
-
 def _mita_load_memory():
-    global _MITA_DIALOG_MEMORY
-    try:
-        if os.path.exists(_MITA_MEMORY_FILE):
-            data = json.loads(Path(_MITA_MEMORY_FILE).read_text(encoding="utf-8"))
-            if isinstance(data, list):
-                _MITA_DIALOG_MEMORY = data[-30:]
-    except Exception:
-        _MITA_DIALOG_MEMORY = []
-
+global _MITA_DIALOG_MEMORY
+try:
+if os.path.exists(_MITA_MEMORY_FILE):
+data = json.loads(Path(_MITA_MEMORY_FILE).read_text(encoding="utf-8"))
+if isinstance(data, list):
+_MITA_DIALOG_MEMORY = data[-30:]
+except Exception:
+_MITA_DIALOG_MEMORY = []
 def _mita_save_memory():
-    try:
-        Path(_MITA_MEMORY_FILE).write_text(
-            json.dumps(_MITA_DIALOG_MEMORY[-30:], ensure_ascii=False, indent=2),
-            encoding="utf-8"
-        )
-    except Exception:
-        pass
-
+try:
+Path(_MITA_MEMORY_FILE).write_text(
+json.dumps(_MITA_DIALOG_MEMORY[-30:], ensure_ascii=False, indent=2),
+encoding="utf-8"
+)
+except Exception:
+pass
 def _mita_remember(role, content):
-    content = str(content or "").strip()
-    if not content:
-        return
-    _MITA_DIALOG_MEMORY.append({"role": role, "content": content[:5000]})
-    del _MITA_DIALOG_MEMORY[:-30]
-    _mita_save_memory()
-
-def _norm_app_name(value):
-    s = unicodedata.normalize("NFKC", str(value or "")).lower().strip()
-    s = re.sub(r"\.(exe|lnk|url)$", "", s)
-    s = s.replace("_", " ").replace("-", " ")
-    s = re.sub(r"[^0-9a-zа-яёіїєґ+.# ]+", " ", s, flags=re.I)
-    s = re.sub(r"\s+", " ", s).strip()
-    replacements = {
-        "дискорд":"discord", "дискордд":"discord", "discord":"discord",
-        "телега":"telegram", "телеграмм":"telegram", "телеграм":"telegram",
-        "telegram":"telegram", "стим":"steam", "steam":"steam",
-        "хром":"chrome", "гугл хром":"chrome", "google chrome":"chrome",
-        "браузер":"chrome", "роблокс":"roblox", "roblox":"roblox",
-        "спотифай":"spotify", "spotify":"spotify", "обс":"obs", "обс студио":"obs", "obs studio":"obs",
-        "бс":"bluestacks", "блюстакс":"bluestacks", "блустакс":"bluestacks",
-        "blue stacks":"bluestacks", "bluestacks":"bluestacks",
-        "кс":"cs2", "кс 2":"cs2", "counter strike 2":"cs2",
-        "дота":"dota 2", "dota2":"dota 2", "дота 2":"dota 2",
-        "калькулятор":"calculator", "блокнот":"notepad", "проводник":"explorer",
-        "диспетчер задач":"task manager", "параметры":"settings"
-    }
-    return replacements.get(s, s)
-
+content = str(content or "").strip()
+if not content:
+return
+_MITA_DIALOG_MEMORY.append({"role": role, "content": content[:5000]})
+del _MITA_DIALOG_MEMORY[:-30]
+_mita_save_memory()
+def norm_app_name(value):
+s = unicodedata.normalize("NFKC", str(value or "")).lower().strip()
+s = re.sub(r".(exe|lnk|url)$", "", s)
+s = s.replace("", " ").replace("-", " ")
+s = re.sub(r"[^0-9a-zа-яёіїєґ+.# ]+", " ", s, flags=re.I)
+s = re.sub(r"\s+", " ", s).strip()
+replacements = {
+"дискорд":"discord", "дискордд":"discord", "discord":"discord",
+"телега":"telegram", "телеграмм":"telegram", "телеграм":"telegram",
+"telegram":"telegram", "стим":"steam", "steam":"steam",
+"хром":"chrome", "гугл хром":"chrome", "google chrome":"chrome",
+"браузер":"chrome", "роблокс":"roblox", "roblox":"roblox",
+"спотифай":"spotify", "spotify":"spotify", "обс":"obs", "обс студио":"obs", "obs studio":"obs",
+"бс":"bluestacks", "блюстакс":"bluestacks", "блустакс":"bluestacks",
+"blue stacks":"bluestacks", "bluestacks":"bluestacks",
+"кс":"cs2", "кс 2":"cs2", "counter strike 2":"cs2",
+"дота":"dota 2", "dota2":"dota 2", "дота 2":"dota 2",
+"калькулятор":"calculator", "блокнот":"notepad", "проводник":"explorer",
+"диспетчер задач":"task manager", "параметры":"settings"
+}
+return replacements.get(s, s)
 def _build_smart_app_index(force=False):
-    global _MITA_APP_INDEX, _MITA_APP_INDEX_TIME
-    now = time.time()
-    if _MITA_APP_INDEX is not None and not force and now - _MITA_APP_INDEX_TIME < 600:
-        return _MITA_APP_INDEX
-
+global _MITA_APP_INDEX, _MITA_APP_INDEX_TIME
+now = time.time()
+if _MITA_APP_INDEX is not None and not force and now - _MITA_APP_INDEX_TIME < 600:
+return _MITA_APP_INDEX
     items = []
     seen = set()
 
@@ -2440,40 +2362,38 @@ def _build_smart_app_index(force=False):
     return items
 
 def _smart_app_match(query):
-    q = _norm_app_name(query)
-    if not q:
-        return None, 0.0
-    items = _build_smart_app_index()
-    best = None
-    best_score = 0.0
-    q_tokens = set(q.split())
-    for item in items:
-        n = item["norm"]
-        if not n:
-            continue
-        if q == n:
-            score = 1.0
-        elif q in n or n in q:
-            score = 0.92 if min(len(q), len(n)) >= 3 else 0.75
-        else:
-            seq = difflib.SequenceMatcher(None, q, n).ratio()
-            nt = set(n.split())
-            token = len(q_tokens & nt) / max(1, len(q_tokens | nt))
-            score = max(seq, token * 0.92)
-        if score > best_score:
-            best, best_score = item, score
-    return best, best_score
-
+q = _norm_app_name(query)
+if not q:
+return None, 0.0
+items = _build_smart_app_index()
+best = None
+best_score = 0.0
+q_tokens = set(q.split())
+for item in items:
+n = item["norm"]
+if not n:
+continue
+if q == n:
+score = 1.0
+elif q in n or n in q:
+score = 0.92 if min(len(q), len(n)) >= 3 else 0.75
+else:
+seq = difflib.SequenceMatcher(None, q, n).ratio()
+nt = set(n.split())
+token = len(q_tokens & nt) / max(1, len(q_tokens | nt))
+score = max(seq, token * 0.92)
+if score > best_score:
+best, best_score = item, score
+return best, best_score
 def _launch_index_item(item):
-    """Запускает только реально найденный элемент индекса."""
-    if not item:
-        return False
-    try:
-        path = str(item.get("path") or "").strip()
-        kind = item.get("kind")
-        if not path:
-            return False
-
+"""Запускает только реально найденный элемент индекса."""
+if not item:
+return False
+try:
+path = str(item.get("path") or "").strip()
+kind = item.get("kind")
+if not path:
+return False
         if kind == "command":
             # Для встроенных Windows-команд допускаем запуск по имени.
             subprocess.Popen(path, shell=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
@@ -2488,26 +2408,24 @@ def _launch_index_item(item):
         return False
 
 
-def _ai_resolve_app_identity(target_raw):
-    """
-    ИИ превращает разговорное/ошибочно распознанное название программы
-    в нормальное имя и вероятные имена exe.
-    НИЧЕГО не запускает — только возвращает подсказки для локального поиска.
-    """
-    target = str(target_raw or "").strip()
-    if not target or client is None:
-        return None
 
+def _ai_resolve_app_identity(target_raw):
+"""
+ИИ превращает разговорное/ошибочно распознанное название программы
+в нормальное имя и вероятные имена exe.
+НИЧЕГО не запускает — только возвращает подсказки для локального поиска.
+"""
+target = str(target_raw or "").strip()
+if not target or client is None:
+return None
     prompt = f"""
 Ты — модуль распознавания названий Windows-приложений.
 Пользователь голосом произнёс название приложения: {target!r}
-
 Нужно понять, какую ПРОГРАММУ он имеет в виду, даже если:
-- название сказано по-русски/украински/английски;
-- это транслит или фонетическая запись;
-- есть ошибка распознавания речи;
-- используется сокращение или сленг.
-
+название сказано по-русски/украински/английски;
+это транслит или фонетическая запись;
+есть ошибка распознавания речи;
+используется сокращение или сленг.
 Примеры:
 "обс", "о б с", "obs" -> OBS Studio, exe обычно obs64.exe.
 "бс", "блюстакс", "blue stacks" -> BlueStacks, exe может быть HD-Player.exe / BlueStacks.exe.
@@ -2522,38 +2440,35 @@ def _ai_resolve_app_identity(target_raw):
 "кс", "кс два" -> Counter-Strike 2, exe cs2.exe.
 "гта пять" -> Grand Theft Auto V, возможны GTA5.exe / PlayGTAV.exe.
 "майнкрафт" -> Minecraft / Minecraft Launcher, найди наиболее вероятный Windows launcher.
-
 Верни ТОЛЬКО JSON без markdown:
 {{
-  "app_name": "официальное или наиболее вероятное название",
-  "search_names": ["вариант 1", "вариант 2", "вариант 3"],
-  "exe_candidates": ["program.exe", "another.exe"],
-  "confidence": 0.0
+"app_name": "официальное или наиболее вероятное название",
+"search_names": ["вариант 1", "вариант 2", "вариант 3"],
+"exe_candidates": ["program.exe", "another.exe"],
+"confidence": 0.0
 }}
-
 Правила:
-- Не придумывай shell-команды, аргументы запуска, URL или пути.
-- exe_candidates должны содержать только имена файлов *.exe.
-- Браузер, игра, лаунчер, мессенджер, редактор или любая другая установленная программа — это приложение.
-- Если пользователь назвал браузер (Chrome, Opera, Yandex, Firefox, Edge и т.п.), верни именно приложение браузера.
-- Если сокращение неоднозначно, выбери наиболее вероятную известную программу, но снизь confidence.
-- Максимум 6 search_names и 6 exe_candidates.
+Не придумывай shell-команды, аргументы запуска, URL или пути.
+exe_candidates должны содержать только имена файлов *.exe.
+Браузер, игра, лаунчер, мессенджер, редактор или любая другая установленная программа — это приложение.
+Если пользователь назвал браузер (Chrome, Opera, Yandex, Firefox, Edge и т.п.), верни именно приложение браузера.
+Если сокращение неоднозначно, выбери наиболее вероятную известную программу, но снизь confidence.
+Максимум 6 search_names и 6 exe_candidates.
 """
-    try:
-        completion = client.chat.completions.create(
-            model="openai/gpt-oss-120b",
-            messages=[{"role": "user", "content": prompt}],
-            temperature=0.0,
-            max_completion_tokens=300,
-            top_p=1,
-            reasoning_effort="medium",
-            stream=False
-        )
-        obj = _extract_json_object(completion.choices[0].message.content)
-        if not isinstance(obj, dict):
-            return None
-
-        app_name = str(obj.get("app_name") or "").strip()
+try:
+completion = client.chat.completions.create(
+model="openai/gpt-oss-120b",
+messages=[{"role": "user", "content": prompt}],
+temperature=0.0,
+max_completion_tokens=300,
+top_p=1,
+reasoning_effort="medium",
+stream=False
+)
+obj = _extract_json_object(completion.choices[0].message.content)
+if not isinstance(obj, dict):
+return None
+  app_name = str(obj.get("app_name") or "").strip()
         search_names = obj.get("search_names") or []
         exe_candidates = obj.get("exe_candidates") or []
 
@@ -2585,17 +2500,15 @@ def _ai_resolve_app_identity(target_raw):
             "exe_candidates": safe_exes,
             "confidence": confidence,
         }
-    except Exception as e:
-        print(f"[Mita App AI] Ошибка определения приложения: {e}")
-        return None
+except Exception as e:
+print(f"[Mita App AI] Ошибка определения приложения: {e}")
+return None
 
-
-def _find_and_launch_exe_candidate(exe_name, cache_key=None):
-    """Ищет конкретный exe и запускает только если путь действительно найден."""
-    exe_name = os.path.basename(str(exe_name or "").strip())
-    if not re.fullmatch(r"(?i)[a-z0-9_. +()-]{1,100}\.exe", exe_name):
-        return False, None
-
+def find_and_launch_exe_candidate(exe_name, cache_key=None):
+"""Ищет конкретный exe и запускает только если путь действительно найден."""
+exe_name = os.path.basename(str(exe_name or "").strip())
+if not re.fullmatch(r"(?i)[a-z0-9. +()-]{1,100}.exe", exe_name):
+return False, None
     try:
         found_path = find_exe_fast_registry(exe_name)
     except Exception:
@@ -2626,10 +2539,10 @@ def _find_and_launch_exe_candidate(exe_name, cache_key=None):
         return False, None
 
 
-def _legacy_smart_launch_application_ai(target_raw):
-    """
-    AI-FIRST запуск приложения.
 
+def _legacy_smart_launch_application_ai(target_raw):
+"""
+AI-FIRST запуск приложения.
     Любое название сначала отправляется в ИИ. ИИ определяет, что пользователь
     имел в виду, и возвращает только безопасные поисковые подсказки: название
     программы и возможные *.exe. Уже после этого Mita ищет РЕАЛЬНЫЙ ярлык/EXE
@@ -2717,62 +2630,55 @@ def _legacy_smart_launch_application_ai(target_raw):
     return False, None
 
 def _extract_json_object(text):
-    s = str(text or "").strip()
-    s = re.sub(r"^```(?:json)?\s*", "", s, flags=re.I)
-    s = re.sub(r"\s*```$", "", s)
-    start, end = s.find("{"), s.rfind("}")
-    if start < 0 or end <= start:
-        return None
-    try:
-        return json.loads(s[start:end+1])
-    except Exception:
-        return None
-
-# ============================================================
-# ПОДТВЕРЖДЕНИЕ ЗАПУСКА ПРИЛОЖЕНИЙ / ИГР
-# ============================================================
+s = str(text or "").strip()
+s = re.sub(r"^`(?:json)?\s*", "", s, flags=re.I) s = re.sub(r"\s*`$", "", s)
+start, end = s.find("{"), s.rfind("}")
+if start < 0 or end <= start:
+return None
+try:
+return json.loads(s[start:end+1])
+except Exception:
+return None
+============================================================
+ПОДТВЕРЖДЕНИЕ ЗАПУСКА ПРИЛОЖЕНИЙ / ИГР
+============================================================
 _PENDING_APP_LAUNCH = None
 _PENDING_APP_LAUNCH_TIMEOUT = 30.0
 
-
 def _set_pending_app_launch(spoken_target, resolved_name=None):
-    """Запоминает приложение, которое Мита предложила запустить."""
-    global _PENDING_APP_LAUNCH
-    resolved = str(resolved_name or spoken_target or "").strip()
-    spoken = str(spoken_target or resolved).strip()
-    _PENDING_APP_LAUNCH = {
-        "spoken_target": spoken,
-        "resolved_name": resolved,
-        "created_at": time.time(),
-    }
-    return resolved
-
+"""Запоминает приложение, которое Мита предложила запустить."""
+global _PENDING_APP_LAUNCH
+resolved = str(resolved_name or spoken_target or "").strip()
+spoken = str(spoken_target or resolved).strip()
+_PENDING_APP_LAUNCH = {
+"spoken_target": spoken,
+"resolved_name": resolved,
+"created_at": time.time(),
+}
+return resolved
 
 def _clear_pending_app_launch():
-    global _PENDING_APP_LAUNCH
-    _PENDING_APP_LAUNCH = None
-
+global _PENDING_APP_LAUNCH
+_PENDING_APP_LAUNCH = None
 
 def _get_pending_app_launch():
-    global _PENDING_APP_LAUNCH
-    if not _PENDING_APP_LAUNCH:
-        return None
-    if time.time() - float(_PENDING_APP_LAUNCH.get("created_at", 0)) > _PENDING_APP_LAUNCH_TIMEOUT:
-        _PENDING_APP_LAUNCH = None
-        return None
-    return _PENDING_APP_LAUNCH
-
+global _PENDING_APP_LAUNCH
+if not _PENDING_APP_LAUNCH:
+return None
+if time.time() - float(_PENDING_APP_LAUNCH.get("created_at", 0)) > _PENDING_APP_LAUNCH_TIMEOUT:
+_PENDING_APP_LAUNCH = None
+return None
+return _PENDING_APP_LAUNCH
 
 def _handle_pending_app_confirmation(phrase, interface):
-    """
-    Обрабатывает короткий ответ пользователя после вопроса
-    «Хотите запустить ...?».
-    Возвращает True, если фраза была ответом на подтверждение.
-    """
-    pending = _get_pending_app_launch()
-    if not pending:
-        return False
-
+"""
+Обрабатывает короткий ответ пользователя после вопроса
+«Хотите запустить ...?».
+Возвращает True, если фраза была ответом на подтверждение.
+"""
+pending = _get_pending_app_launch()
+if not pending:
+return False
     text = str(phrase or "").lower().strip()
     words = set(re.findall(r"[а-яёіїєґa-z0-9]+", text, flags=re.I))
 
@@ -2836,71 +2742,67 @@ def _handle_pending_app_confirmation(phrase, interface):
     return True
 
 
+
 def mita_plan_intent(user_text):
-    """ИИ понимает свободную фразу и превращает её только в разрешённое действие."""
-    if client is None:
-        return None
-    lang = "uk" if UI_LANGUAGE == "ua" else "ru"
-    prompt = f"""
+"""ИИ понимает свободную фразу и превращает её только в разрешённое действие."""
+if client is None:
+return None
+lang = "uk" if UI_LANGUAGE == "ua" else "ru"
+prompt = f"""
 Ты — модуль понимания команд Windows-ассистента Mita.
 Пойми намерение пользователя, даже если есть ошибки распознавания, сленг, падежи,
 русский/украинский/английский, транслит или неточная формулировка.
-
 Верни ТОЛЬКО один JSON-объект без markdown.
 Разрешённые intent:
 launch_app, close_app, open_web, minimize_all, minimize_app, move_window,
 write_text, weather, stop_speech, chat.
-
 Схема:
 {{"intent":"...", "target":"", "text":"", "monitor":0, "confidence":0.0}}
-
 Правила:
-- "зайди/открой/вруби/запусти дискордик" => launch_app.
-- Любая просьба запустить/включить/открыть НАЗВАНИЕ ПРОГРАММЫ, БРАУЗЕРА, ИГРЫ или ЛАУНЧЕРА => launch_app.
-- "запусти хром/яндекс/оперу/firefox/edge" => launch_app, а НЕ open_web.
-- "запусти кс/доту/гта/майнкрафт/роблокс" => launch_app.
-- Только если явно про сайт, веб-страницу, URL или поиск в интернете => open_web.
-- "убери/закрой/выруби программу" => close_app.
-- "напиши/введи/напечатай ..." => write_text, поле text содержит только текст для печати.
-- Если не просит управлять ПК, intent=chat.
-- Не придумывай опасные shell-команды и не возвращай код.
-- Язык интерфейса: {lang}.
+"зайди/открой/вруби/запусти дискордик" => launch_app.
+Любая просьба запустить/включить/открыть НАЗВАНИЕ ПРОГРАММЫ, БРАУЗЕРА, ИГРЫ или ЛАУНЧЕРА => launch_app.
+"запусти хром/яндекс/оперу/firefox/edge" => launch_app, а НЕ open_web.
+"запусти кс/доту/гта/майнкрафт/роблокс" => launch_app.
+Только если явно про сайт, веб-страницу, URL или поиск в интернете => open_web.
+"убери/закрой/выруби программу" => close_app.
+"напиши/введи/напечатай ..." => write_text, поле text содержит только текст для печати.
+Если не просит управлять ПК, intent=chat.
+Не придумывай опасные shell-команды и не возвращай код.
+Язык интерфейса: {lang}.
 Фраза пользователя: {user_text!r}
 """
-    try:
-        completion = client.chat.completions.create(
-            model="openai/gpt-oss-120b",
-            messages=[{"role":"user","content":prompt}],
-            temperature=0.0,
-            max_completion_tokens=300,
-            top_p=1,
-            reasoning_effort="medium",
-            stream=False
-        )
-        obj = _extract_json_object(completion.choices[0].message.content)
-        if not isinstance(obj, dict):
-            return None
-        if obj.get("intent") not in {
-            "launch_app","close_app","open_web","minimize_all","minimize_app",
-            "move_window","write_text","weather","stop_speech","chat"
-        }:
-            return None
-        try:
-            obj["confidence"] = float(obj.get("confidence", 0.0))
-        except Exception:
-            obj["confidence"] = 0.0
-        return obj
-    except Exception as e:
-        print(f"[Mita Brain] Ошибка планировщика: {e}")
-        return None
-
+try:
+completion = client.chat.completions.create(
+model="openai/gpt-oss-120b",
+messages=[{"role":"user","content":prompt}],
+temperature=0.0,
+max_completion_tokens=300,
+top_p=1,
+reasoning_effort="medium",
+stream=False
+)
+obj = _extract_json_object(completion.choices[0].message.content)
+if not isinstance(obj, dict):
+return None
+if obj.get("intent") not in {
+"launch_app","close_app","open_web","minimize_all","minimize_app",
+"move_window","write_text","weather","stop_speech","chat"
+}:
+return None
+try:
+obj["confidence"] = float(obj.get("confidence", 0.0))
+except Exception:
+obj["confidence"] = 0.0
+return obj
+except Exception as e:
+print(f"[Mita Brain] Ошибка планировщика: {e}")
+return None
 def process_smart_ai_command(phrase, interface):
-    plan = mita_plan_intent(phrase)
-    if not plan or plan.get("confidence", 0.0) < 0.55:
-        return False
-    intent = plan.get("intent")
-    target = str(plan.get("target") or "").strip()
-
+plan = mita_plan_intent(phrase)
+if not plan or plan.get("confidence", 0.0) < 0.55:
+return False
+intent = plan.get("intent")
+target = str(plan.get("target") or "").strip()
     if intent == "chat":
         return False
     if intent == "launch_app":
@@ -2952,211 +2854,192 @@ def process_smart_ai_command(phrase, interface):
     return False
 
 _mita_load_memory()
-
-# ============================================================
-# GROQ API
-# ============================================================
-
+============================================================
+GROQ API
+============================================================
 GROQ_API_KEY =  "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"
 client = Groq(api_key=GROQ_API_KEY) if GROQ_API_KEY else None
-
 def ask_groq(question):
-    if client is None:
-        return "⚠️ Groq API ключ не настроен."
-    try:
-        ui_lang = UI_LANGUAGE
-        lang_text = "українською" if ui_lang == "ua" else "русском"
-        system_prompt = f"""Ты — Mita, очень умный персональный голосовой ассистент для Windows.
+if client is None:
+return "⚠️ Groq API ключ не настроен."
+try:
+ui_lang = UI_LANGUAGE
+lang_text = "українською" if ui_lang == "ua" else "русском"
+system_prompt = f"""Ты — Mita, очень умный персональный голосовой ассистент для Windows.
 Отвечай ТОЛЬКО на {lang_text} языке, естественно и по-человечески.
 Ты должна понимать сленг, опечатки, неполные фразы, контекст и продолжения разговора.
 Не притворяйся, что выполнила действие на ПК: системные действия выполняет отдельный модуль.
 Если это обычный вопрос — дай полезный, точный ответ. Если вопрос простой — отвечай кратко.
 Не добавляй markdown без необходимости. Не выдумывай факты."""
-        messages = [{"role":"system","content":system_prompt}]
-        for msg in _MITA_DIALOG_MEMORY[-12:]:
-            if isinstance(msg, dict) and msg.get("role") in ("user","assistant"):
-                messages.append({"role":msg["role"],"content":str(msg.get("content",""))})
-        messages.append({"role":"user","content":str(question)})
-        completion = client.chat.completions.create(
-            model="openai/gpt-oss-120b",
-            messages=messages,
-            temperature=0.55,
-            max_completion_tokens=2048,
-            top_p=1,
-            reasoning_effort="high",
-            stream=False
-        )
-        answer = str(completion.choices[0].message.content or "").strip()
-        _mita_remember("user", question)
-        _mita_remember("assistant", answer)
-        return answer
-    except Exception as e:
-        return T("error_text").format(e)
-
+messages = [{"role":"system","content":system_prompt}]
+for msg in _MITA_DIALOG_MEMORY[-12:]:
+if isinstance(msg, dict) and msg.get("role") in ("user","assistant"):
+messages.append({"role":msg["role"],"content":str(msg.get("content",""))})
+messages.append({"role":"user","content":str(question)})
+completion = client.chat.completions.create(
+model="openai/gpt-oss-120b",
+messages=messages,
+temperature=0.55,
+max_completion_tokens=2048,
+top_p=1,
+reasoning_effort="high",
+stream=False
+)
+answer = str(completion.choices[0].message.content or "").strip()
+_mita_remember("user", question)
+_mita_remember("assistant", answer)
+return answer
+except Exception as e:
+return T("error_text").format(e)
 def ask_groq_chat(question, chat_history=None):
-    if client is None:
-        return "⚠️ Groq API ключ не настроен. Добавьте переменную окружения GROQ_API_KEY."
-    try:
-        ui_lang = UI_LANGUAGE
-        lang_text = "українською" if ui_lang == "ua" else "русском"
-        system_prompt = f"""Ты — голосовой ассистент Мита. Ты милая и дружелюбная девушка-помощник.
+if client is None:
+return "⚠️ Groq API ключ не настроен. Добавьте переменную окружения GROQ_API_KEY."
+try:
+ui_lang = UI_LANGUAGE
+lang_text = "українською" if ui_lang == "ua" else "русском"
+system_prompt = f"""Ты — голосовой ассистент Мита. Ты милая и дружелюбная девушка-помощник.
 Ты ОБЯЗАН отвечать ТОЛЬКО на {lang_text} языке!
 Даже если вопрос на другом языке - ВСЕГДА отвечай на {lang_text}!
 Отвечай кратко и по делу. Без форматирования."""
-        messages = [{"role": "system", "content": system_prompt}]
-        if chat_history:
-            for msg in chat_history[-10:]:
-                messages.append(msg)
-        messages.append({"role": "user", "content": question})
-        completion = client.chat.completions.create(
-            model="openai/gpt-oss-120b",
-            messages=messages,
-            temperature=0.9,
-            max_completion_tokens=1024,
-            top_p=1,
-            reasoning_effort="medium",
-            stream=False
-        )
-        return completion.choices[0].message.content
-    except Exception as e:
-        return T("error_text").format(e)
-
-# ============================================================
-# КЛЮЧИ И АВТОРИЗАЦИЯ
-# ============================================================
-
+messages = [{"role": "system", "content": system_prompt}]
+if chat_history:
+for msg in chat_history[-10:]:
+messages.append(msg)
+messages.append({"role": "user", "content": question})
+completion = client.chat.completions.create(
+model="openai/gpt-oss-120b",
+messages=messages,
+temperature=0.9,
+max_completion_tokens=1024,
+top_p=1,
+reasoning_effort="medium",
+stream=False
+)
+return completion.choices[0].message.content
+except Exception as e:
+return T("error_text").format(e)
+============================================================
+КЛЮЧИ И АВТОРИЗАЦИЯ
+============================================================
 SOUNDS_DIR = os.path.join(BASE_DIR, "sounds")
 JSON_CACHE_FILE = os.path.join(BASE_DIR, "saveAppPty.json")
-
 KEY_DB_FILE = os.path.join(BASE_DIR, "stella_keys.json")
 ACTIVATED_KEY_FILE = os.path.join(BASE_DIR, "stella_activated_key.json")
-
 KEY_TABLE = {
-    "STELLA-1MIN": {"seconds": 60, "created_at": "2026-08-30 12:00:00"},
-    "STELLA-1H": {"seconds": 3600, "created_at": "2026-08-30 12:00:00"},
-    "STELLA-1DAY": {"seconds": 86400, "created_at": "2026-08-30 12:00:00"},
-    "STELLA-1WEEK": {"seconds": 604800, "created_at": "2026-08-30 12:00:00"},
+"STELLA-1MIN": {"seconds": 60, "created_at": "2026-08-30 12:00:00"},
+"STELLA-1H": {"seconds": 3600, "created_at": "2026-08-30 12:00:00"},
+"STELLA-1DAY": {"seconds": 86400, "created_at": "2026-08-30 12:00:00"},
+"MITANOLIMITS": {"seconds": 9999999999, "created_at": "2026-10-07 24:00:00"},
 }
-
 def _load_json_file(path):
-    try:
-        if os.path.exists(path):
-            with open(path, "r", encoding="utf-8") as f:
-                return json.load(f)
-    except Exception:
-        pass
-    return {}
-
+try:
+if os.path.exists(path):
+with open(path, "r", encoding="utf-8") as f:
+return json.load(f)
+except Exception:
+pass
+return {}
 def _save_json_file(path, data):
-    try:
-        with open(path, "w", encoding="utf-8") as f:
-            json.dump(data, f, ensure_ascii=False, indent=4)
-        return True
-    except Exception:
-        return False
-
+try:
+with open(path, "w", encoding="utf-8") as f:
+json.dump(data, f, ensure_ascii=False, indent=4)
+return True
+except Exception:
+return False
 def _remaining_text(seconds):
-    seconds = max(0, int(seconds))
-    d, rem = divmod(seconds, 86400)
-    h, rem = divmod(rem, 3600)
-    m, s = divmod(rem, 60)
-    if d: return f"{d}д {h}ч"
-    if h: return f"{h}ч {m}м"
-    if m: return f"{m}м {s}с"
-    return f"{s}с"
-
+seconds = max(0, int(seconds))
+d, rem = divmod(seconds, 86400)
+h, rem = divmod(rem, 3600)
+m, s = divmod(rem, 60)
+if d: return f"{d}д {h}ч"
+if h: return f"{h}ч {m}м"
+if m: return f"{m}м {s}с"
+return f"{s}с"
 def _build_key_db():
-    db = _load_json_file(KEY_DB_FILE)
-    changed = False
-    for key, cfg in KEY_TABLE.items():
-        if key not in db:
-            created = datetime.strptime(cfg["created_at"], "%Y-%m-%d %H:%M:%S").timestamp()
-            db[key] = {
-                "created_at": created,
-                "expires_at": created + cfg["seconds"],
-                "duration_seconds": cfg["seconds"],
-                "activated": False,
-                "activated_at": None,
-            }
-            changed = True
-    if changed:
-        _save_json_file(KEY_DB_FILE, db)
-    return db
-
+db = _load_json_file(KEY_DB_FILE)
+changed = False
+for key, cfg in KEY_TABLE.items():
+if key not in db:
+created = datetime.strptime(cfg["created_at"], "%Y-%m-%d %H:%M:%S").timestamp()
+db[key] = {
+"created_at": created,
+"expires_at": created + cfg["seconds"],
+"duration_seconds": cfg["seconds"],
+"activated": False,
+"activated_at": None,
+}
+changed = True
+if changed:
+_save_json_file(KEY_DB_FILE, db)
+return db
 def _get_saved_key():
-    saved = _load_json_file(ACTIVATED_KEY_FILE)
-    key = str(saved.get("key", "")).strip().upper()
-    if not key: return None
-    db = _build_key_db()
-    info = db.get(key)
-    if not info: return None
-    if time.time() >= float(info.get("expires_at", 0)):
-        return None
-    return key
-
+saved = _load_json_file(ACTIVATED_KEY_FILE)
+key = str(saved.get("key", "")).strip().upper()
+if not key: return None
+db = _build_key_db()
+info = db.get(key)
+if not info: return None
+if time.time() >= float(info.get("expires_at", 0)):
+return None
+return key
 def _remember_key(key):
-    _save_json_file(ACTIVATED_KEY_FILE, {"key": key, "saved_at": time.time()})
-
+_save_json_file(ACTIVATED_KEY_FILE, {"key": key, "saved_at": time.time()})
 def _clear_saved_key():
-    if os.path.exists(ACTIVATED_KEY_FILE):
-        try:
-            os.remove(ACTIVATED_KEY_FILE)
-            return True
-        except:
-            pass
-    return False
-
+if os.path.exists(ACTIVATED_KEY_FILE):
+try:
+os.remove(ACTIVATED_KEY_FILE)
+return True
+except:
+pass
+return False
 def validate_stella_key(key):
-    key = key.strip().upper()
-    db = _build_key_db()
-    if key not in db:
-        return False, "Неверный ключ"
-    info = db[key]
-    remaining = float(info["expires_at"]) - time.time()
-    if remaining <= 0:
-        return False, "Срок действия ключа закончился"
-    info["activated"] = True
-    info["activated_at"] = info.get("activated_at") or time.time()
-    db[key] = info
-    _save_json_file(KEY_DB_FILE, db)
-    _remember_key(key)
-    return True, f"Ключ принят • осталось {_remaining_text(remaining)}"
-
-# ============================================================
-# ОКНО ВЫБОРА РЕЖИМА ПРИ ЗАПУСКЕ
-# ============================================================
-
+key = key.strip().upper()
+db = _build_key_db()
+if key not in db:
+return False, "Неверный ключ"
+info = db[key]
+remaining = float(info["expires_at"]) - time.time()
+if remaining <= 0:
+return False, "Срок действия ключа закончился"
+info["activated"] = True
+info["activated_at"] = info.get("activated_at") or time.time()
+db[key] = info
+_save_json_file(KEY_DB_FILE, db)
+_remember_key(key)
+return True, f"Ключ принят • осталось {_remaining_text(remaining)}"
+============================================================
+ОКНО ВЫБОРА РЕЖИМА ПРИ ЗАПУСКЕ
+============================================================
 
 class CyberButton(tk.Canvas):
-    """Canvas-based modern beveled button with hover/glow and Tk-like config()."""
-    def __init__(self, master, text="", command=None, accent=False, danger=False,
-                 width=None, height=38, **kwargs):
-        self.command = command
-        self.text = str(text)
-        self.state = tk.NORMAL
-        self.accent = accent
-        self.danger = danger
-        self._hover = False
-        self._custom_bg = None
-        self._custom_fg = None
-        self._base_bg = "#151123"
-        self._panel = "#100d19"
-        self._line = "#34264c"
-        self._cyan = "#8f5cff"
-        self._cyan2 = "#c3a5ff"
-        self._green = "#52e6a5"
-        self._amber = "#ffb52e"
-        reqw = 150 if width is None else max(90, int(width)*9)
-        super().__init__(master, width=reqw, height=height, bg=master.cget("bg"),
-                         highlightthickness=0, bd=0, relief="flat", cursor="hand2")
-        self._h = height
-        self.bind("<Configure>", lambda e: self._draw())
-        self.bind("<Enter>", self._enter)
-        self.bind("<Leave>", self._leave)
-        self.bind("<Button-1>", self._click)
-        self.bind("<ButtonRelease-1>", lambda e: self._draw())
-        self._draw()
-
+"""Canvas-based modern beveled button with hover/glow and Tk-like config()."""
+def init(self, master, text="", command=None, accent=False, danger=False,
+width=None, height=38, **kwargs):
+self.command = command
+self.text = str(text)
+self.state = tk.NORMAL
+self.accent = accent
+self.danger = danger
+self._hover = False
+self._custom_bg = None
+self._custom_fg = None
+self._base_bg = "#151123"
+self._panel = "#100d19"
+self._line = "#34264c"
+self._cyan = "#8f5cff"
+self._cyan2 = "#c3a5ff"
+self._green = "#52e6a5"
+self._amber = "#ffb52e"
+reqw = 150 if width is None else max(90, int(width)*9)
+super().init(master, width=reqw, height=height, bg=master.cget("bg"),
+highlightthickness=0, bd=0, relief="flat", cursor="hand2")
+self._h = height
+self.bind("<Configure>", lambda e: self._draw())
+self.bind("<Enter>", self._enter)
+self.bind("<Leave>", self._leave)
+self.bind("<Button-1>", self._click)
+self.bind("<ButtonRelease-1>", lambda e: self._draw())
+self._draw()
     def _palette(self):
         if self.state == tk.DISABLED:
             return "#061017", "#0a2a37", "#42616d", "#0b2632"
@@ -3216,16 +3099,16 @@ class CyberButton(tk.Canvas):
     configure = config
 
 
-class ModeSelectionWindow:
-    def __init__(self, parent=None):
-        self.result = MODE_ALL
-        self.parent = parent
-        self.root = tk.Tk() if parent is None else tk.Toplevel(parent)
-        self.root.title("MITA // SECURE MODE SELECTOR")
-        self.root.geometry("620x560")
-        self.root.resizable(False, False)
-        self.root.configure(bg="#0b0912")
 
+class ModeSelectionWindow:
+def init(self, parent=None):
+self.result = MODE_ALL
+self.parent = parent
+self.root = tk.Tk() if parent is None else tk.Toplevel(parent)
+self.root.title("MITA // SECURE MODE SELECTOR")
+self.root.geometry("620x560")
+self.root.resizable(False, False)
+self.root.configure(bg="#0b0912")
         if parent is not None:
             self.root.transient(parent)
             self.root.grab_set()
@@ -3329,31 +3212,28 @@ class ModeSelectionWindow:
         return self.result
 
 def get_saved_mode():
-    try:
-        pref_file = os.path.join(BASE_DIR, "mita_mode_pref.json")
-        if os.path.exists(pref_file):
-            with open(pref_file, "r", encoding="utf-8") as f:
-                data = json.load(f)
-                if data.get("dont_show", False):
-                    return data.get("mode", MODE_ALL)
-    except:
-        pass
-    return None
-
-# ============================================================
-# КЛАСС КЛЮЧЕВОГО ОКНА
-# ============================================================
-
+try:
+pref_file = os.path.join(BASE_DIR, "mita_mode_pref.json")
+if os.path.exists(pref_file):
+with open(pref_file, "r", encoding="utf-8") as f:
+data = json.load(f)
+if data.get("dont_show", False):
+return data.get("mode", MODE_ALL)
+except:
+pass
+return None
+============================================================
+КЛАСС КЛЮЧЕВОГО ОКНА
+============================================================
 class KeyLoginWindow:
-    def __init__(self, parent=None):
-        self.result = False
-        self.parent = parent
-        self.root = tk.Tk() if parent is None else tk.Toplevel(parent)
-        self.root.title("MITA // SECURE ACCESS")
-        self.root.geometry("620x430")
-        self.root.resizable(False, False)
-        self.root.configure(bg="#0b0912")
-
+def init(self, parent=None):
+self.result = False
+self.parent = parent
+self.root = tk.Tk() if parent is None else tk.Toplevel(parent)
+self.root.title("MITA // SECURE ACCESS")
+self.root.geometry("620x430")
+self.root.resizable(False, False)
+self.root.configure(bg="#0b0912")
         if parent is not None:
             self.root.transient(parent)
             self.root.grab_set()
@@ -3405,27 +3285,24 @@ class KeyLoginWindow:
         return self.result
 
 def require_stella_key(parent=None):
-    _build_key_db()
-    if _get_saved_key():
-        return True
-    return KeyLoginWindow(parent).show()
-
-# ============================================================
-# СИСТЕМНЫЙ АУДИО МОНИТОР
-# ============================================================
-
+_build_key_db()
+if _get_saved_key():
+return True
+return KeyLoginWindow(parent).show()
+============================================================
+СИСТЕМНЫЙ АУДИО МОНИТОР
+============================================================
 class SystemAudioMonitor:
-    def __init__(self, interface):
-        self.interface = interface
-        self.running = False
-        self.thread = None
-        self.audio_data = []
-        self.sample_rate = 44100
-        self.chunk_size = 1024
-        self.threshold = 0.02
-        self.last_beat_time = 0
-        self.beat_smoothing = 0.0
-
+def init(self, interface):
+self.interface = interface
+self.running = False
+self.thread = None
+self.audio_data = []
+self.sample_rate = 44100
+self.chunk_size = 1024
+self.threshold = 0.02
+self.last_beat_time = 0
+self.beat_smoothing = 0.0
     def start(self):
         if self.running:
             return
@@ -3489,15 +3366,13 @@ class SystemAudioMonitor:
         except Exception as e:
             print(f"[Audio Fallback Error]: {e}")
 
-# ============================================================
-# ОСНОВНОЙ ИНТЕРФЕЙС
-# ============================================================
-
+============================================================
+ОСНОВНОЙ ИНТЕРФЕЙС
+============================================================
 class MisideInterface:
-    """Modern MITA / MISIDE inspired interface.
-    Logic and voice/music back-end remain compatible with the original script.
-    """
-
+"""Modern MITA / MISIDE inspired interface.
+Logic and voice/music back-end remain compatible with the original script.
+"""
     W, H = 1280, 820
 
     def __init__(self):
@@ -5797,12 +5672,12 @@ class MisideInterface:
         self.root.mainloop()
 
 
-# ============================================================
-# УМНЫЙ VAD / ШУМОПОДАВЛЕНИЕ МИКРОФОНА
-# Игнорирует постоянный фон (вентилятор/гул), быстрее ловит голос.
-# Не требует дополнительных библиотек.
-# ============================================================
 
+============================================================
+УМНЫЙ VAD / ШУМОПОДАВЛЕНИЕ МИКРОФОНА
+Игнорирует постоянный фон (вентилятор/гул), быстрее ловит голос.
+Не требует дополнительных библиотек.
+============================================================
 VOICE_MIN_RMS = 0.0040
 VOICE_NOISE_MULTIPLIER = 2.8
 VOICE_START_BLOCKS = 2
@@ -5817,13 +5692,11 @@ VOICE_NOISE_LEARN_RATE = 0.035
 VOICE_NOISE_FLOOR_INIT = 0.0030
 VOICE_DEBUG = False
 
-
 def _voice_features(samples, sample_rate):
-    """Быстрые признаки речи: RMS + энергия речевого диапазона + спектральный центр."""
-    x = np.asarray(samples, dtype=np.float32)
-    if x.size < 16:
-        return 0.0, 0.0, 0.0
-
+"""Быстрые признаки речи: RMS + энергия речевого диапазона + спектральный центр."""
+x = np.asarray(samples, dtype=np.float32)
+if x.size < 16:
+return 0.0, 0.0, 0.0
     # Убираем DC и немного подавляем низкочастотный гул вентилятора.
     x = x - float(np.mean(x))
     hp = np.empty_like(x)
@@ -5849,9 +5722,9 @@ def _voice_features(samples, sample_rate):
     return rms, band_ratio, centroid
 
 
-def voice_assistant_thread(interface, recognizer, audio_queue, sample_rate, ENERGY_THRESHOLD, SILENCE_LIMIT):
-    from collections import deque
 
+def voice_assistant_thread(interface, recognizer, audio_queue, sample_rate, ENERGY_THRESHOLD, SILENCE_LIMIT):
+from collections import deque
     word_buffer = []
     pre_roll = deque(maxlen=VOICE_PREROLL_BLOCKS)
     silence_counter = 0
@@ -5987,54 +5860,49 @@ def voice_assistant_thread(interface, recognizer, audio_queue, sample_rate, ENER
                     _finish_phrase()
 
 
-# ============================================================
-# СИСТЕМНЫЕ ФУНКЦИИ
-# ============================================================
 
+============================================================
+СИСТЕМНЫЕ ФУНКЦИИ
+============================================================
 try:
-    import soundfile as sf
-    HAS_SOUNDFILE = True
+import soundfile as sf
+HAS_SOUNDFILE = True
 except ImportError:
-    HAS_SOUNDFILE = False
-
+HAS_SOUNDFILE = False
 pyautogui.FAILSAFE = False
 pyautogui.PAUSE = 0.05
-
 BAD_WORDS = ["нахуй", "блядь", "блять", "сука", "хуй", "пизда", "пиздец",
-             "ебан", "ебать", "заеб", "пидор", "гандон", "мудак", "уебок",
-             "тупой", "дебил", "идиот", "кретин", "олень", "козел", "козёл",
-             "лох", "лошара", "чмо", "шлюха", "курва", "бля", "нах", "хер"]
-
+"ебан", "ебать", "заеб", "пидор", "гандон", "мудак", "уебок",
+"тупой", "дебил", "идиот", "кретин", "олень", "козел", "козёл",
+"лох", "лошара", "чмо", "шлюха", "курва", "бля", "нах", "хер"]
 
 def get_available_drives() -> list[str]:
-    drives = []
-    for letter in string.ascii_uppercase:
-        drive_path = f"{letter}:\\"
-        if os.path.exists(drive_path):
-            drives.append(drive_path)
-    return drives
-
+drives = []
+for letter in string.ascii_uppercase:
+drive_path = f"{letter}:\"
+if os.path.exists(drive_path):
+drives.append(drive_path)
+return drives
 
 def find_mita_folder():
-    possible_paths = [
-        r"C:\AI MITA\MitaAIShka",
-        r"D:\AI MITA\MitaAIShka",
-        r"E:\AI MITA\MitaAIShka",
-        r"C:\Program Files\AI MITA\MitaAIShka",
-        r"C:\Program Files (x86)\AI MITA\MitaAIShka",
-        r"C:\Users\{}\Documents\AI MITA\MitaAIShka".format(os.getlogin()),
-        r"C:\Users\{}\Desktop\AI MITA\MitaAIShka".format(os.getlogin()),
-        os.path.join(os.getcwd(), "MitaAIShka"),
-        os.path.join(os.getcwd(), "AI MITA", "MitaAIShka"),
-        os.path.join(BASE_DIR, "MitaAIShka"),
-        os.path.join(BASE_DIR, "AI MITA", "MitaAIShka"),
-    ]
-    for drive in get_available_drives():
-        possible_paths.append(os.path.join(drive, "AI MITA", "MitaAIShka"))
-        possible_paths.append(os.path.join(drive, "MitaAIShka"))
-        possible_paths.append(os.path.join(drive, "Users", os.getlogin(), "Documents", "AI MITA", "MitaAIShka"))
-        possible_paths.append(os.path.join(drive, "Users", os.getlogin(), "Desktop", "AI MITA", "MitaAIShka"))
-
+possible_paths = [
+r"C:\AI MITA\MitaAIShka",
+r"D:\AI MITA\MitaAIShka",
+r"E:\AI MITA\MitaAIShka",
+r"C:\Program Files\AI MITA\MitaAIShka",
+r"C:\Program Files (x86)\AI MITA\MitaAIShka",
+r"C:\Users{}\Documents\AI MITA\MitaAIShka".format(os.getlogin()),
+r"C:\Users{}\Desktop\AI MITA\MitaAIShka".format(os.getlogin()),
+os.path.join(os.getcwd(), "MitaAIShka"),
+os.path.join(os.getcwd(), "AI MITA", "MitaAIShka"),
+os.path.join(BASE_DIR, "MitaAIShka"),
+os.path.join(BASE_DIR, "AI MITA", "MitaAIShka"),
+]
+for drive in get_available_drives():
+possible_paths.append(os.path.join(drive, "AI MITA", "MitaAIShka"))
+possible_paths.append(os.path.join(drive, "MitaAIShka"))
+possible_paths.append(os.path.join(drive, "Users", os.getlogin(), "Documents", "AI MITA", "MitaAIShka"))
+possible_paths.append(os.path.join(drive, "Users", os.getlogin(), "Desktop", "AI MITA", "MitaAIShka"))
     print("🔍 Ищу папку MitaAIShka...")
     for path in possible_paths:
         if os.path.exists(path):
@@ -6069,39 +5937,34 @@ def find_mita_folder():
     return os.getcwd()
 
 
+
 MODEL_DIR = find_mita_folder()
 model_path = os.path.join(MODEL_DIR, "model.int8.onnx")
 tokens_path = os.path.join(MODEL_DIR, "tokens.txt")
-
 if not os.path.exists(model_path) or not os.path.exists(tokens_path):
-    print("❌ ОШИБКА: Файлы модели не найдены!")
-    print(f"   Искал в: {MODEL_DIR}")
-    model_path = os.path.join(BASE_DIR, "model.int8.onnx")
-    tokens_path = os.path.join(BASE_DIR, "tokens.txt")
-    if os.path.exists(model_path) and os.path.exists(tokens_path):
-        MODEL_DIR = BASE_DIR
-        print(f"✅ Модель найдена в: {MODEL_DIR}")
-    else:
-        print(f"❌ Модель не найдена! Проверьте папку с программой.")
-        input("Нажмите Enter для выхода...")
-        sys.exit(1)
-
+print("❌ ОШИБКА: Файлы модели не найдены!")
+print(f"   Искал в: {MODEL_DIR}")
+model_path = os.path.join(BASE_DIR, "model.int8.onnx")
+tokens_path = os.path.join(BASE_DIR, "tokens.txt")
+if os.path.exists(model_path) and os.path.exists(tokens_path):
+MODEL_DIR = BASE_DIR
+print(f"✅ Модель найдена в: {MODEL_DIR}")
+else:
+print(f"❌ Модель не найдена! Проверьте папку с программой.")
+input("Нажмите Enter для выхода...")
+sys.exit(1)
 print(f"✅ Модель загружена из: {MODEL_DIR}")
-
 recognizer = sherpa_onnx.OfflineRecognizer.from_nemo_ctc(
-    model=model_path,
-    tokens=tokens_path,
-    num_threads=max(4, min(10, (os.cpu_count() or 6))),
-    debug=False,
+model=model_path,
+tokens=tokens_path,
+num_threads=max(4, min(10, (os.cpu_count() or 6))),
+debug=False,
 )
-
 sample_rate = 16000
 audio_queue = queue.Queue()
 ENERGY_THRESHOLD = 0.015  # legacy: умный VAD использует динамический порог
 SILENCE_LIMIT = 4       # legacy: завершение фразы теперь ~240 мс
-
 TRIGGER_WORDS = ["мита", "стелла", "кепочка", "стелам", "стеллу", "міта", "стела", "стелі"]
-
 APP_VERBS = ["запусти", "запустил", "включи", "запустить", "включить", "запусти", "увімкни", "відкрий", "відкрити"]
 WEB_VERBS = ["открой", "открыть", "перейди", "перейти", "покажи", "відкрий", "відкрити", "перейди", "перейти", "покажи"]
 CLOSE_VERBS = ["закрой", "закрыть", "выключи", "выключить", "убей", "закрий", "закрити", "вимкни", "вимкнути"]
@@ -6109,304 +5972,284 @@ LANG_VERBS = ["измени", "смени", "поменяй", "переключ�
 MOVE_VERBS = ["переведи", "перемести", "перекинь", "отправь", "переведи", "перемісти", "перекинь", "відправ"]
 WRITE_VERBS = ["напиши", "напечатай", "пиши", "печатай", "набор", "напишіть", "надрукуй", "пиши", "друкуй"]
 MINIMIZE_VERBS = ["сверни", "свернуть", "скрой", "спрячь", "згорни", "згорнути", "скрий", "сховай"]
-
 GREETINGS_MAP = {
-    "ты тут": ("Да, я здесь! Чем помочь?\nТак, я тут! Чим допомогти?", "hello"),
-    "ты здесь": ("Здесь. Слушаю вас.\nТут. Слухаю вас.", "hello"),
-    "привет": ("Привет! Что нужно запустить или открыть?\nПривіт! Що потрібно запустити або відкрити?", "hello"),
-    "привіт": ("Привіт! Що потрібно запустити або відкрити?\nПривет! Что нужно запустить или открыть?", "hello"),
-    "как дела": ("Все отлично, готова к работе!\nВсе добре, готова до роботи!", "ok"),
-    "як справи": ("Все добре, готова до роботи!\nВсе отлично, готова к работе!", "ok"),
-    "не спишь": ("Я всегда на связи!\nЯ завжди на зв'язку!", "ok"),
-    "не спиш": ("Я завжди на зв'язку!\nЯ всегда на связи!", "ok"),
+"ты тут": ("Да, я здесь! Чем помочь?\nТак, я тут! Чим допомогти?", "hello"),
+"ты здесь": ("Здесь. Слушаю вас.\nТут. Слухаю вас.", "hello"),
+"привет": ("Привет! Что нужно запустить или открыть?\nПривіт! Що потрібно запустити або відкрити?", "hello"),
+"привіт": ("Привіт! Що потрібно запустити або відкрити?\nПривет! Что нужно запустить или открыть?", "hello"),
+"как дела": ("Все отлично, готова к работе!\nВсе добре, готова до роботи!", "ok"),
+"як справи": ("Все добре, готова до роботи!\nВсе отлично, готова к работе!", "ok"),
+"не спишь": ("Я всегда на связи!\nЯ завжди на зв'язку!", "ok"),
+"не спиш": ("Я завжди на зв'язку!\nЯ всегда на связи!", "ok"),
 }
-
 APP_TRANSLIT_MAP = {
-    "дискорд": "discord", "роблокс": "roblox", "стим": "steam",
-    "тим": "steam", "телеграм": "telegram", "телеграмму": "telegram",
-    "телеграмм": "telegram", "телега": "telegram", "браузер": "chrome",
-    "хром": "chrome", "яндекс": "yandex", "спотифай": "spotify",
-    "дота": "dota2", "кс": "cs2", "калькулятор": "calc", "блокнот": "notepad",
-    "телеграм": "telegram", "спотіфай": "spotify", "калькулятор": "calc", "блокнот": "notepad",
-    "обс": "obs", "о б с": "obs", "обс студио": "obs",
-    "бс": "bluestacks", "блюстакс": "bluestacks", "блустакс": "bluestacks", "blue stacks": "bluestacks",
-    "дс": "discord", "дискордик": "discord", "тг": "telegram", "спотик": "spotify",
+"дискорд": "discord", "роблокс": "roblox", "стим": "steam",
+"тим": "steam", "телеграм": "telegram", "телеграмму": "telegram",
+"телеграмм": "telegram", "телега": "telegram", "браузер": "chrome",
+"хром": "chrome", "яндекс": "yandex", "спотифай": "spotify",
+"дота": "dota2", "кс": "cs2", "калькулятор": "calc", "блокнот": "notepad",
+"телеграм": "telegram", "спотіфай": "spotify", "калькулятор": "calc", "блокнот": "notepad",
+"обс": "obs", "о б с": "obs", "обс студио": "obs",
+"бс": "bluestacks", "блюстакс": "bluestacks", "блустакс": "bluestacks", "blue stacks": "bluestacks",
+"дс": "discord", "дискордик": "discord", "тг": "telegram", "спотик": "spotify",
 }
-
 APP_EXE_MAP = {
-    "roblox": "RobloxPlayerBeta.exe", "discord": "Discord.exe",
-    "telegram": "Telegram.exe", "steam": "steam.exe",
-    "chrome": "chrome.exe", "yandex": "browser.exe",
-    "spotify": "Spotify.exe", "dota2": "dota2.exe",
-    "геншин": "launcher.exe", "obs": "obs64.exe",
-    "bluestacks": "HD-Player.exe",
-    "cs2": "cs2.exe", "calc": "calc.exe", "notepad": "notepad.exe",
+"roblox": "RobloxPlayerBeta.exe", "discord": "Discord.exe",
+"telegram": "Telegram.exe", "steam": "steam.exe",
+"chrome": "chrome.exe", "yandex": "browser.exe",
+"spotify": "Spotify.exe", "dota2": "dota2.exe",
+"геншин": "launcher.exe", "obs": "obs64.exe",
+"bluestacks": "HD-Player.exe",
+"cs2": "cs2.exe", "calc": "calc.exe", "notepad": "notepad.exe",
 }
-
 PROCESS_KILL_MAP = {
-    "obs": "obs64.exe", "discord": "Discord.exe",
-    "telegram": "Telegram.exe", "steam": "steam.exe",
-    "chrome": "chrome.exe", "yandex": "browser.exe",
-    "spotify": "Spotify.exe", "геншин": "HoYoPlay.exe",
-    "dota2": "dota2.exe", "roblox": "RobloxPlayerBeta.exe",
-    "cs2": "cs2.exe", "calc": "calc.exe", "notepad": "notepad.exe",
+"obs": "obs64.exe", "discord": "Discord.exe",
+"telegram": "Telegram.exe", "steam": "steam.exe",
+"chrome": "chrome.exe", "yandex": "browser.exe",
+"spotify": "Spotify.exe", "геншин": "HoYoPlay.exe",
+"dota2": "dota2.exe", "roblox": "RobloxPlayerBeta.exe",
+"cs2": "cs2.exe", "calc": "calc.exe", "notepad": "notepad.exe",
 }
-
 WEB_URLS_MAP = {
-    "тик ток": "https://www.tiktok.com",
-    "тикток": "https://www.tiktok.com",
-    "ютуб": "https://www.youtube.com",
-    "ютубчик": "https://www.youtube.com",
-    "гугл": "https://www.google.com",
-    "яндекс": "https://ya.ru",
-    "вк": "https://vk.com",
-    "вконтакте": "https://vk.com",
-    "телеграм": "https://web.telegram.org",
-    "гитхаб": "https://github.com",
-    "покет": "https://m.pocketoption.com",
+"тик ток": "https://www.tiktok.com",
+"тикток": "https://www.tiktok.com",
+"ютуб": "https://www.youtube.com",
+"ютубчик": "https://www.youtube.com",
+"гугл": "https://www.google.com",
+"яндекс": "https://ya.ru",
+"вк": "https://vk.com",
+"вконтакте": "https://vk.com",
+"телеграм": "https://web.telegram.org",
+"гитхаб": "https://github.com",
+"покет": "https://m.pocketoption.com",
 }
-
 
 def minimize_all_windows():
-    if not play_sound("minimize_all") and not play_sound("minimize"):
-        play_sound("ok")
-    pyautogui.hotkey('win', 'm')
-    print("[Стелла]: Все окна свернуты")
-    return True
-
+if not play_sound("minimize_all") and not play_sound("minimize"):
+play_sound("ok")
+pyautogui.hotkey('win', 'm')
+print("[Стелла]: Все окна свернуты")
+return True
 
 def minimize_window(target_raw: str):
-    target_clean = target_raw.lower().strip()
-    app_key = APP_TRANSLIT_MAP.get(target_clean, target_clean)
-    exe_name = APP_EXE_MAP.get(app_key, app_key)
-    if not play_sound(f"minimize_{app_key}") and not play_sound("minimize"):
-        play_sound("ok")
-    win = get_window_by_exe_name(exe_name)
-    if win:
-        try:
-            if win.isMinimized:
-                return True
-            win.minimize()
-            return True
-        except:
-            return False
-    return False
-
+target_clean = target_raw.lower().strip()
+app_key = APP_TRANSLIT_MAP.get(target_clean, target_clean)
+exe_name = APP_EXE_MAP.get(app_key, app_key)
+if not play_sound(f"minimize_{app_key}") and not play_sound("minimize"):
+play_sound("ok")
+win = get_window_by_exe_name(exe_name)
+if win:
+try:
+if win.isMinimized:
+return True
+win.minimize()
+return True
+except:
+return False
+return False
 
 def change_language():
-    if not play_sound("change_lang"):
-        if not play_sound("language"):
-            play_sound("ok")
-    pyautogui.hotkey("alt", "shift")
-    pyautogui.hotkey("ctrl", "shift")
-
+if not play_sound("change_lang"):
+if not play_sound("language"):
+play_sound("ok")
+pyautogui.hotkey("alt", "shift")
+pyautogui.hotkey("ctrl", "shift")
 
 def get_window_by_exe_name(exe_name: str):
-    target_exe = exe_name.lower()
-    if not target_exe.endswith(".exe"):
-        target_exe += ".exe"
-    matching_pids = set()
-    for proc in psutil.process_iter(['pid', 'name']):
-        try:
-            if proc.info['name'] and proc.info['name'].lower() == target_exe:
-                matching_pids.add(proc.info['pid'])
-        except:
-            continue
-    if not matching_pids:
-        return None
-    all_wins = gw.getAllWindows()
-    for w in all_wins:
-        if not w.title and w.width == 0 and w.height == 0:
-            continue
-        try:
-            if hasattr(w, '_hWnd'):
-                import win32process
-                _, win_pid = win32process.GetWindowThreadProcessId(w._hWnd)
-                if win_pid in matching_pids and w.visible:
-                    return w
-        except:
-            pass
-    return None
-
+target_exe = exe_name.lower()
+if not target_exe.endswith(".exe"):
+target_exe += ".exe"
+matching_pids = set()
+for proc in psutil.process_iter(['pid', 'name']):
+try:
+if proc.info['name'] and proc.info['name'].lower() == target_exe:
+matching_pids.add(proc.info['pid'])
+except:
+continue
+if not matching_pids:
+return None
+all_wins = gw.getAllWindows()
+for w in all_wins:
+if not w.title and w.width == 0 and w.height == 0:
+continue
+try:
+if hasattr(w, '_hWnd'):
+import win32process
+_, win_pid = win32process.GetWindowThreadProcessId(w._hWnd)
+if win_pid in matching_pids and w.visible:
+return w
+except:
+pass
+return None
 
 def move_window_to_monitor(target_raw: str, monitor_num: int):
-    target_clean = target_raw.lower().strip()
-    app_key = APP_TRANSLIT_MAP.get(target_clean, target_clean)
-    exe_name = APP_EXE_MAP.get(app_key, app_key)
-    win = None
-    if exe_name:
-        win = get_window_by_exe_name(exe_name)
-    if not win:
-        all_wins = gw.getAllWindows()
-        for w in all_wins:
-            if w.title and target_clean in w.title.lower():
-                win = w
-                break
-    if not win:
-        win = gw.getActiveWindow()
-    if not win:
-        return False
-    PRIMARY_MONITOR_WIDTH = 1920
-    new_x = 100 if monitor_num == 1 else PRIMARY_MONITOR_WIDTH + 100
-    try:
-        if win.isMinimized:
-            win.restore()
-        if win.isMaximized:
-            win.restore()
-        win.moveTo(new_x, 100)
-        win.maximize()
-        play_sound("move")
-        return True
-    except:
-        return False
-
+target_clean = target_raw.lower().strip()
+app_key = APP_TRANSLIT_MAP.get(target_clean, target_clean)
+exe_name = APP_EXE_MAP.get(app_key, app_key)
+win = None
+if exe_name:
+win = get_window_by_exe_name(exe_name)
+if not win:
+all_wins = gw.getAllWindows()
+for w in all_wins:
+if w.title and target_clean in w.title.lower():
+win = w
+break
+if not win:
+win = gw.getActiveWindow()
+if not win:
+return False
+PRIMARY_MONITOR_WIDTH = 1920
+new_x = 100 if monitor_num == 1 else PRIMARY_MONITOR_WIDTH + 100
+try:
+if win.isMinimized:
+win.restore()
+if win.isMaximized:
+win.restore()
+win.moveTo(new_x, 100)
+win.maximize()
+play_sound("move")
+return True
+except:
+return False
 
 CONTROL_COMMANDS = {
-    "вверх": lambda: pyautogui.scroll(400),
-    "вниз": lambda: pyautogui.scroll(-400),
-    "вгору": lambda: pyautogui.scroll(400),
-    "вниз": lambda: pyautogui.scroll(-400),
-    "клик": lambda: pyautogui.click(),
-    "нажми": lambda: pyautogui.click(),
-    "клік": lambda: pyautogui.click(),
-    "натисни": lambda: pyautogui.click(),
-    "дабл клик": lambda: pyautogui.doubleClick(),
-    "двойной клик": lambda: pyautogui.doubleClick(),
-    "подвійний клік": lambda: pyautogui.doubleClick(),
-    "скопировать": lambda: keyboard.press_and_release('ctrl+c'),
-    "скопируй": lambda: keyboard.press_and_release('ctrl+c'),
-    "скопіювати": lambda: keyboard.press_and_release('ctrl+c'),
-    "скопіюй": lambda: keyboard.press_and_release('ctrl+c'),
-    "вставить": lambda: keyboard.press_and_release('ctrl+v'),
-    "вставь": lambda: keyboard.press_and_release('ctrl+v'),
-    "вставити": lambda: keyboard.press_and_release('ctrl+v'),
-    "вставте": lambda: keyboard.press_and_release('ctrl+v'),
-    "скрин": lambda: pyautogui.press("printscreen"),
-    "скриншот": lambda: pyautogui.press("printscreen"),
-    "скрін": lambda: pyautogui.press("printscreen"),
-    "скріншот": lambda: pyautogui.press("printscreen"),
-    "смени язык": change_language,
-    "поменяй язык": change_language,
-    "переключи язык": change_language,
-    "зміни мову": change_language,
-    "поміняй мову": change_language,
-    "переключи мову": change_language,
+"вверх": lambda: pyautogui.scroll(400),
+"вниз": lambda: pyautogui.scroll(-400),
+"вгору": lambda: pyautogui.scroll(400),
+"вниз": lambda: pyautogui.scroll(-400),
+"клик": lambda: pyautogui.click(),
+"нажми": lambda: pyautogui.click(),
+"клік": lambda: pyautogui.click(),
+"натисни": lambda: pyautogui.click(),
+"дабл клик": lambda: pyautogui.doubleClick(),
+"двойной клик": lambda: pyautogui.doubleClick(),
+"подвійний клік": lambda: pyautogui.doubleClick(),
+"скопировать": lambda: keyboard.press_and_release('ctrl+c'),
+"скопируй": lambda: keyboard.press_and_release('ctrl+c'),
+"скопіювати": lambda: keyboard.press_and_release('ctrl+c'),
+"скопіюй": lambda: keyboard.press_and_release('ctrl+c'),
+"вставить": lambda: keyboard.press_and_release('ctrl+v'),
+"вставь": lambda: keyboard.press_and_release('ctrl+v'),
+"вставити": lambda: keyboard.press_and_release('ctrl+v'),
+"вставте": lambda: keyboard.press_and_release('ctrl+v'),
+"скрин": lambda: pyautogui.press("printscreen"),
+"скриншот": lambda: pyautogui.press("printscreen"),
+"скрін": lambda: pyautogui.press("printscreen"),
+"скріншот": lambda: pyautogui.press("printscreen"),
+"смени язык": change_language,
+"поменяй язык": change_language,
+"переключи язык": change_language,
+"зміни мову": change_language,
+"поміняй мову": change_language,
+"переключи мову": change_language,
 }
 
-
 def play_sound_worker(file_path: str):
-    try:
-        if HAS_SOUNDFILE:
-            data, fs = sf.read(file_path, dtype="float32")
-            sd.play(data, fs)
-            sd.wait()
-    except:
-        pass
-
+try:
+if HAS_SOUNDFILE:
+data, fs = sf.read(file_path, dtype="float32")
+sd.play(data, fs)
+sd.wait()
+except:
+pass
 
 def play_sound(sound_name: str) -> bool:
-    if not os.path.exists(SOUNDS_DIR):
-        return False
-    target_clean = sound_name.lower().strip()
-    for file in os.listdir(SOUNDS_DIR):
-        file_base, ext = os.path.splitext(file)
-        if ext.lower() not in [".wav", ".mp3", ".ogg", ".flac"]:
-            continue
-        if file_base.lower() == target_clean or file_base.lower() == target_clean.replace(" ", "_"):
-            sound_path = os.path.join(SOUNDS_DIR, file)
-            threading.Thread(target=play_sound_worker, args=(sound_path,), daemon=True).start()
-            return True
-    return False
-
+if not os.path.exists(SOUNDS_DIR):
+return False
+target_clean = sound_name.lower().strip()
+for file in os.listdir(SOUNDS_DIR):
+file_base, ext = os.path.splitext(file)
+if ext.lower() not in [".wav", ".mp3", ".ogg", ".flac"]:
+continue
+if file_base.lower() == target_clean or file_base.lower() == target_clean.replace(" ", "_"):
+sound_path = os.path.join(SOUNDS_DIR, file)
+threading.Thread(target=play_sound_worker, args=(sound_path,), daemon=True).start()
+return True
+return False
 
 def load_app_cache() -> dict:
-    if not os.path.exists(JSON_CACHE_FILE):
-        return {}
-    try:
-        with open(JSON_CACHE_FILE, "r", encoding="utf-8") as f:
-            return json.load(f)
-    except:
-        return {}
-
+if not os.path.exists(JSON_CACHE_FILE):
+return {}
+try:
+with open(JSON_CACHE_FILE, "r", encoding="utf-8") as f:
+return json.load(f)
+except:
+return {}
 
 def save_app_cache(cache_data: dict):
-    with open(JSON_CACHE_FILE, "w", encoding="utf-8") as f:
-        json.dump(cache_data, f, ensure_ascii=False, indent=4)
-
+with open(JSON_CACHE_FILE, "w", encoding="utf-8") as f:
+json.dump(cache_data, f, ensure_ascii=False, indent=4)
 
 def find_exe_fast_registry(exe_name: str):
-    if not exe_name.endswith(".exe"):
-        exe_name = f"{exe_name}.exe"
-    reg_key = rf"SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\{exe_name}"
-    for hive in (winreg.HKEY_CURRENT_USER, winreg.HKEY_LOCAL_MACHINE):
-        try:
-            with winreg.OpenKey(hive, reg_key) as key:
-                path, _ = winreg.QueryValueEx(key, "")
-                if os.path.exists(path):
-                    return path
-        except:
-            continue
-    return None
-
+if not exe_name.endswith(".exe"):
+exe_name = f"{exe_name}.exe"
+reg_key = rf"SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths{exe_name}"
+for hive in (winreg.HKEY_CURRENT_USER, winreg.HKEY_LOCAL_MACHINE):
+try:
+with winreg.OpenKey(hive, reg_key) as key:
+path, _ = winreg.QueryValueEx(key, "")
+if os.path.exists(path):
+return path
+except:
+continue
+return None
 
 def search_exe_on_disks(exe_name: str):
-    target_exe = exe_name.lower() if exe_name.endswith(".exe") else f"{exe_name}.exe".lower()
-    drives = get_available_drives()
-    priority_dirs = ["Program Files", "Program Files (x86)", "Users", "Games"]
-    for drive in drives:
-        for p_dir in priority_dirs:
-            full_p_path = os.path.join(drive, p_dir)
-            if os.path.exists(full_p_path):
-                for root, _, files in os.walk(full_p_path):
-                    for file in files:
-                        if file.lower() == target_exe:
-                            return os.path.join(root, file)
-        for root, _, files in os.walk(drive):
-            if any(skip in root.lower() for skip in ["$recycle.bin", "windows\\winsxs", "windows\\servicing"]):
-                continue
-            for file in files:
-                if file.lower() == target_exe:
-                    return os.path.join(root, file)
-    return None
-
+target_exe = exe_name.lower() if exe_name.endswith(".exe") else f"{exe_name}.exe".lower()
+drives = get_available_drives()
+priority_dirs = ["Program Files", "Program Files (x86)", "Users", "Games"]
+for drive in drives:
+for p_dir in priority_dirs:
+full_p_path = os.path.join(drive, p_dir)
+if os.path.exists(full_p_path):
+for root, _, files in os.walk(full_p_path):
+for file in files:
+if file.lower() == target_exe:
+return os.path.join(root, file)
+for root, _, files in os.walk(drive):
+if any(skip in root.lower() for skip in ["$recycle.bin", "windows\winsxs", "windows\servicing"]):
+continue
+for file in files:
+if file.lower() == target_exe:
+return os.path.join(root, file)
+return None
 
 def launch_application(target_raw: str):
-    target_clean = target_raw.lower().strip()
-    app_key = APP_TRANSLIT_MAP.get(target_clean, target_clean)
-    exe_name = APP_EXE_MAP.get(app_key, app_key)
-    if not play_sound(target_clean) and not play_sound(app_key):
-        play_sound("ok")
-    cache = load_app_cache()
-    if app_key in cache and os.path.exists(cache[app_key]):
-        os.startfile(cache[app_key])
-        return True
-    found_path = find_exe_fast_registry(exe_name)
-    if not found_path:
-        found_path = search_exe_on_disks(exe_name)
-    if found_path and os.path.exists(found_path):
-        cache[app_key] = found_path
-        save_app_cache(cache)
-        os.startfile(found_path)
-        return True
-    try:
-        subprocess.Popen(exe_name, shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        return True
-    except:
-        pass
-    play_sound("error")
-    return False
-
+target_clean = target_raw.lower().strip()
+app_key = APP_TRANSLIT_MAP.get(target_clean, target_clean)
+exe_name = APP_EXE_MAP.get(app_key, app_key)
+if not play_sound(target_clean) and not play_sound(app_key):
+play_sound("ok")
+cache = load_app_cache()
+if app_key in cache and os.path.exists(cache[app_key]):
+os.startfile(cache[app_key])
+return True
+found_path = find_exe_fast_registry(exe_name)
+if not found_path:
+found_path = search_exe_on_disks(exe_name)
+if found_path and os.path.exists(found_path):
+cache[app_key] = found_path
+save_app_cache(cache)
+os.startfile(found_path)
+return True
+try:
+subprocess.Popen(exe_name, shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+return True
+except:
+pass
+play_sound("error")
+return False
 
 def kill_application(target_raw: str):
-    """
-    Закрывает приложение умно:
-    1) понимает сокращения вроде тг / дс / рб;
-    2) использует PROCESS_KILL_MAP;
-    3) если приложение найдено в MitaApps — берет его имя/алиасы;
-    4) если точного процесса нет — ищет максимально похожий запущенный процесс.
-    """
-    target_clean = str(target_raw or "").lower().strip()
-
+"""
+Закрывает приложение умно:
+1) понимает сокращения вроде тг / дс / рб;
+2) использует PROCESS_KILL_MAP;
+3) если приложение найдено в MitaApps — берет его имя/алиасы;
+4) если точного процесса нет — ищет максимально похожий запущенный процесс.
+"""
+target_clean = str(target_raw or "").lower().strip()
     if not target_clean:
         return False
 
@@ -6572,25 +6415,24 @@ def kill_application(target_raw: str):
     return False
 
 
-def open_website(target_raw: str):
-    target_clean = target_raw.lower().strip()
-    if not play_sound(target_clean):
-        play_sound("ok")
-    if target_clean in WEB_URLS_MAP:
-        webbrowser.open(WEB_URLS_MAP[target_clean])
-        return True
-    if "." in target_clean and not target_clean.endswith(".exe"):
-        url = f"https://{target_clean}" if not target_clean.startswith("http") else target_clean
-        webbrowser.open(url)
-        return True
-    webbrowser.open(f"https://www.google.com/search?q={target_clean}")
-    return True
 
+def open_website(target_raw: str):
+target_clean = target_raw.lower().strip()
+if not play_sound(target_clean):
+play_sound("ok")
+if target_clean in WEB_URLS_MAP:
+webbrowser.open(WEB_URLS_MAP[target_clean])
+return True
+if "." in target_clean and not target_clean.endswith(".exe"):
+url = f"https://{target_clean}" if not target_clean.startswith("http") else target_clean
+webbrowser.open(url)
+return True
+webbrowser.open(f"https://www.google.com/search?q={target_clean}")
+return True
 
 def process_command(text: str, interface):
-    cleaned = text.lower().strip()
-    words = cleaned.split()
-
+cleaned = text.lower().strip()
+words = cleaned.split()
     if not any(tw in words for tw in TRIGGER_WORDS):
         return
 
@@ -6723,11 +6565,11 @@ def process_command(text: str, interface):
     interface.set_processing(False)
 
 
-def process_system_command(phrase: str, interface):
-    cleaned = phrase.lower().strip()
-    words = cleaned.split()
-    ui_lang = UI_LANGUAGE
 
+def process_system_command(phrase: str, interface):
+cleaned = phrase.lower().strip()
+words = cleaned.split()
+ui_lang = UI_LANGUAGE
     if is_weather_request(cleaned):
         result = get_local_weather(force=False, lang=("ua" if UI_LANGUAGE == "ua" else "ru"))
         if result.get("ok"):
@@ -6870,13 +6712,12 @@ def process_system_command(phrase: str, interface):
     return False
 
 
-# ============================================================
-# ГЛАВНАЯ ФУНКЦИЯ
-# ============================================================
 
+============================================================
+ГЛАВНАЯ ФУНКЦИЯ
+============================================================
 def main():
-    global _mita_mode, interface
-
+global _mita_mode, interface
     _load_ui_language()
     print(f"🌍 Язык интерфейса: {UI_LANGUAGE}")
 
@@ -6940,8 +6781,6 @@ def main():
         interface.quit()
 
 
-if __name__ == "__main__":
-    main()
 
-
-
+if name == "main":
+main()
